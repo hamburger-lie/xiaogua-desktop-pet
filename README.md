@@ -9,6 +9,8 @@
 
 [⬇️ 下载安装包](https://github.com/hamburger-lie/xiaogua-desktop-pet/releases/latest) · Windows 10 / 11 · 免费 · 个人使用
 
+已经下载了源代码压缩包？解压后，双击最外层的 **`XiaoguaDesktopPet-Setup-1.0.0.exe`** 就能安装。
+
 </div>
 
 ---
@@ -61,7 +63,10 @@
 
 **1. 下载**
 
-到 [Releases 页面](https://github.com/hamburger-lie/xiaogua-desktop-pet/releases/latest) 下载 `XiaoguaDesktopPet-Setup-x.x.x.exe`，大约 60MB。
+两种方式都行，下到的是同一个安装包（大约 60MB）：
+
+- 到 [Releases 页面](https://github.com/hamburger-lie/xiaogua-desktop-pet/releases/latest)，在 **Assets** 下面点 `XiaoguaDesktopPet-Setup-x.x.x.exe` 下载；
+- 或者在仓库首页点绿色的 **Code → Download ZIP**，解压后最外层就有 `XiaoguaDesktopPet-Setup-x.x.x.exe`。
 
 **2. 双击安装**
 
