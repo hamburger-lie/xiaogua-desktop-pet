@@ -27,6 +27,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+; 使用协议与隐私说明: shown before installing, the user ticks 「我同意」 to go on.
+LicenseFile=..\src\meihua\PRIVACY.txt
 
 [Languages]
 ; The official Simplified Chinese translation (jrsoftware/issrc Files/Languages), kept here:

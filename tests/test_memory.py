@@ -41,7 +41,7 @@ def test_bad_facts_are_refused(kind, text, when):
 
 def test_forget_and_close(tmp_path):
     memory = Memory(tmp_path / "memory.json")
-    memory.add("偏好", "一般打绝密", today=TODAY)
+    memory.add("偏好", "说话直接点", today=TODAY)
     memory.add("计划", "面试", "2026-10-09", today=TODAY)
     assert memory.close("m1", "过了")["status"] == "NOT_FOUND"              # only plans have outcomes
     assert memory.close("[m2]", "过了，下周入职")["status"] == "OK"

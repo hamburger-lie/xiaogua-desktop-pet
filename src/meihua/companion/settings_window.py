@@ -308,7 +308,7 @@ class SettingsWindow(QWidget):
         self.check_result.setWordWrap(True)
         form.addRow("", self.check_result)
 
-        offline = QCheckBox("离线模式：不连模型，只在本地起卦")
+        offline = QCheckBox("离线模式：不连模型，只看黄历和本地起卦，什么都不发出去")
         offline.setChecked(self.config.offline)
         offline.toggled.connect(lambda on: self._set("offline", on))
         form.addRow("", offline)
@@ -462,7 +462,8 @@ class SettingsWindow(QWidget):
         self.style_box.setCurrentText(self.config.voice_style)
         self.style_box.currentTextChanged.connect(lambda text: self._set("voice_style", text))
         form.addRow("说话风格", self.style_box)
-        form.addRow("", self._hint("直白：像队友报点，只说去哪、别去哪、怎么撤。玄一点：多点卦象意境和比喻。下一个问题起生效。"))
+        form.addRow("", self._hint("直白：一句结论加一句为什么，不绕弯。平衡：先给结论，再用大白话说为什么。"
+                                   "玄一点：多一分老黄历的味道和比喻。下一个问题起生效。"))
         self.proactive_box = QComboBox()
         self.proactive_box.addItems(["正常", "少", "关"])
         self.proactive_box.setCurrentText(self.config.proactive)
@@ -739,6 +740,12 @@ class SettingsWindow(QWidget):
         self.history_status = self._hint("小瓜记下聊过的对话，重启后接着聊；关掉就只在内存里记。")
         form.addRow("", self.history_status)
         form.addRow("隐私", self._hint("你问的话只发给你选的模型厂商；记录、记忆和密钥都只存在这台电脑上。"))
+        terms = QPushButton("查看使用协议与隐私说明")
+        terms.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(meihua.ROOT / "PRIVACY.txt"))))
+        row = QHBoxLayout()
+        row.addWidget(terms)
+        row.addStretch()
+        form.addRow("", row)
         return page
 
     def _delete_history(self):

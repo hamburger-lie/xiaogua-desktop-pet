@@ -95,7 +95,7 @@ def pyinstaller() -> Path:
 
 def smoke_test(app_dir: Path) -> None:
     internal = app_dir / "_internal" / "meihua"
-    required = ["engines/lunar_table.json", "references/hexagrams.md", "evidence/meihua.md",
+    required = ["engines/lunar_table.json", "references/hexagrams.md", "evidence/meihua.md", "PRIVACY.txt",
                 "assets/xiaogua-icon.png", "assets/xiaogua/招手/01.png", "assets/ui/check.svg"]
     missing = [r for r in required if not (internal / r).exists()]
     if missing:

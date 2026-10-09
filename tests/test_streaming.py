@@ -69,7 +69,7 @@ def test_only_the_gated_answer_stays_streamed():
         sse(text_chunk("我先起一卦"), *tool_chunks(0, "c1", "cast_now", json.dumps({"question": "面试能成吗"}))),
         sse(text_chunk("东南取财。")),                                    # skips the gate: taken back
         sse(*tool_chunks(0, "c2", "validate_reading", record)),
-        sse(text_chunk("这把往东南摸，"), text_chunk("北边别去。")),
+        sse(text_chunk("能成，"), text_chunk("早点到。")),
     ])
     agent = XiaoguaAgent(client=client, model="m", thinking=False, effort=None)
     shown = []
@@ -81,7 +81,7 @@ def test_only_the_gated_answer_stays_streamed():
         shown.clear()
 
     reply = agent.ask("说说面试", on_text=on_text, on_discard=on_discard)
-    assert reply.validated is True and reply.text == "这把往东南摸，北边别去。"
+    assert reply.validated is True and reply.text == "能成，早点到。"
     assert "".join(shown) == reply.text                  # what is left on screen is the answer
 
 
@@ -174,7 +174,7 @@ def test_discarded_text_brings_the_progress_back(chat):
 
 def test_an_error_mid_stream_leaves_no_half_answer(chat):
     chat.start_thinking()
-    chat.stream_text("这把往")
+    chat.stream_text("今天适合")
     chat.add_error("连不上模型厂商")
     assert [kind for kind, _ in chat.transcript()] == ["error"]
 

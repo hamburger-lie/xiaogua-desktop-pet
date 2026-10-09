@@ -26,7 +26,7 @@ def chatted(session: Session, question="这周哪天适合搬家", answer="周�
 
 def test_put_list_take(tmp_path):
     trash = Trash(tmp_path / "trash")
-    first = trash.put("记忆", "偏好：打绝密", {"id": "m1"}, NOW - timedelta(days=2))
+    first = trash.put("记忆", "偏好：早上别催我", {"id": "m1"}, NOW - timedelta(days=2))
     second = trash.put("对话", "今天适合理发吗", {"id": "c1"}, NOW)
     listed = trash.list(NOW)
     assert [e["id"] for e in listed] == [second, first]                       # newest first
@@ -80,17 +80,17 @@ def test_an_empty_conversation_is_not_kept(tmp_path):
 def test_forgotten_facts_wait_in_the_trash_and_come_back(tmp_path):
     memory = Memory()
     memory.trash = Trash(tmp_path / "trash")
-    memory.add("偏好", "一般打绝密")
+    memory.add("偏好", "早上别催我")
     memory.add("称呼", "老王")
     memory.tool("forget_fact", {"id": "m1"})                                   # the model forgot one
-    assert [e["title"] for e in memory.trash.list()] == ["偏好：一般打绝密"]
+    assert [e["title"] for e in memory.trash.list()] == ["偏好：早上别催我"]
     memory.clear()                                                             # 全部忘掉
     assert len(memory.trash.list()) == 2 and memory.facts == []
-    entry = next(e for e in memory.trash.list() if e["title"] == "偏好：一般打绝密")
+    entry = next(e for e in memory.trash.list() if e["title"] == "偏好：早上别催我")
     memory.add("偏好", "说话直接点")                                           # m1 is given out again
     out = memory.restore(memory.trash.take(entry["id"])["data"])
     assert out["status"] == "OK" and out["id"] != "m1"
-    assert {f.text for f in memory.facts} == {"说话直接点", "一般打绝密"}
+    assert {f.text for f in memory.facts} == {"说话直接点", "早上别催我"}
 
 
 # ------------------------------------------------------------ the pet and the settings
@@ -130,19 +130,19 @@ def test_delete_then_restore_from_the_settings(companion):
 
 def test_a_forgotten_fact_restored_from_the_settings(companion):
     pet, settings = companion.pet, companion.settings
-    pet.session.memory.add("偏好", "一般打绝密")
+    pet.session.memory.add("偏好", "早上别催我")
     settings.refresh_memory()
     settings.memory_list.item(0).setSelected(True)
     settings._forget_selected()
     assert pet.session.memory.facts == [] and settings.trash_list.count() == 1
     settings.trash_list.item(0).setSelected(True)
     settings._restore_selected()
-    assert [f.text for f in pet.session.memory.facts] == ["一般打绝密"]
+    assert [f.text for f in pet.session.memory.facts] == ["早上别催我"]
 
 
 def test_emptying_takes_two_clicks_and_delete_all_empties_it(companion):
     pet, settings = companion.pet, companion.settings
-    pet.session.memory.add("偏好", "一般打绝密")
+    pet.session.memory.add("偏好", "早上别催我")
     pet.session.memory.clear()
     settings.refresh_trash()
     settings._empty_trash()

@@ -223,3 +223,13 @@ def test_lunar_table_matches_the_node_icu_script():
         assert node["local_clock"] == mine["local_clock"]
         assert {k: node["lunar"][k] for k in ("year", "year_name", "month", "is_leap_month", "day")} == \
                {k: mine["lunar"][k] for k in ("year", "year_name", "month", "is_leap_month", "day")}
+
+
+def test_the_about_page_opens_the_terms_and_privacy_text():
+    import meihua
+    window = SettingsWindow(config.Config.load())
+    labels = [b.text() for b in window.findChildren(companion.QWidget) if hasattr(b, "text") and callable(b.text)
+              and b.metaObject().className() == "QPushButton"]
+    assert "查看使用协议与隐私说明" in labels
+    text = (meihua.ROOT / "PRIVACY.txt").read_text(encoding="utf-8-sig")
+    assert "不收集" in text and r"%APPDATA%\MeiriYigua" in text and "CC BY-NC 4.0" in text

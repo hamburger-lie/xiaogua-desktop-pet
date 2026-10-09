@@ -30,7 +30,7 @@ def test_a_time_alone_means_today_and_odd_times_are_refused():
     assert memory.add("计划", "喝水", None, TODAY, at="9:5", now=datetime(2026, 10, 9, 8, 0))["status"] == "OK"
     assert memory.facts[0].date == "2026-10-09" and memory.facts[0].time == "09:05"
     assert memory.add("计划", "开会", None, TODAY, at="25:00", now=NOON)["status"] == "INVALID_INPUT"
-    assert memory.add("偏好", "打绝密", None, TODAY, at="15:00", now=NOON)["status"] == "INVALID_INPUT"
+    assert memory.add("偏好", "说话直接点", None, TODAY, at="15:00", now=NOON)["status"] == "INVALID_INPUT"
 
 
 def test_a_time_already_gone_is_sent_back_to_be_worked_out_again():

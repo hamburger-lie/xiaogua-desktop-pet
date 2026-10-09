@@ -469,7 +469,7 @@ def review(text: str, facts: Facts | None = None) -> Review:
 def redo_message(result: Review, facts: Facts) -> str:
     asks = []
     if result.invented:
-        asks.append(f"回答里说了「{'」「'.join(result.invented)}」，可这一卦没起过（这轮工具、本局卡、前面的话里都没有）。"
+        asks.append(f"回答里说了「{'」「'.join(result.invented)}」，可这一卦没起过（这轮工具和前面的话里都没有）。"
                     "没起卦就别说卦名卦象；要用卦先调 daily_reading，照工具给的卦说。")
     if result.wrong_hours:
         said = "」「".join(result.wrong_hours)
@@ -496,5 +496,5 @@ def settle(result: Review, facts: Facts) -> Review:
         fixes.append("时辰改由程序说")
     if result.invented:
         fixes.append("删掉编的卦")
-        text = text or "这把还没起卦，小瓜不乱说卦。要看就跟我说你在哪张图、从哪出生。"
+        text = text or "这次还没起卦，小瓜不乱说卦。想看一件事，直接问我「能不能」就好。"
     return Review(text, fixes, [], result.too_long, result.late_verdict, [])
