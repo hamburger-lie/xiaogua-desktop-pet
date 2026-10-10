@@ -392,9 +392,9 @@ class ChatPanel(QWidget):
         self.preferred_size: tuple[int, int] | None = None     # set by the pet from the settings
         self.setMinimumSize(*CHAT_MIN)
         self._resizing = None                  # (edges, pointer, geometry) while resized by hand
-        self._placing = False                  # open_beside sizing it: not the user
+        self._dragged = False                  # the user grabbed an edge: the next resizes are theirs
         self._size_timer = QTimer(self, singleShot=True, interval=400)
-        self._size_timer.timeout.connect(lambda: self.resized.emit(self.width(), self.height()))
+        self._size_timer.timeout.connect(self._remember_size)
         QApplication.instance().installEventFilter(self)
 
     # building -------------------------------------------------------------
@@ -848,6 +848,7 @@ class ChatPanel(QWidget):
                 self.setCursor(shape)
             return False
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton and edges:
+            self._dragged = True                     # opening the chat sizes it too: that is not the user's
             handle = self.windowHandle()
             if handle is None or not handle.startSystemResize(edges):     # Windows does it smoothly
                 self._resizing = (edges, point, QRect(self.geometry()))
@@ -877,18 +878,21 @@ class ChatPanel(QWidget):
             Message.max_width = widest
             for message in self.findChildren(Message):
                 message.fit()
-        if self.isVisible() and not self._placing:
+        if self._dragged:
             self._size_timer.start()                 # remember it once the dragging stops
+
+    def _remember_size(self):
+        self._dragged = False
+        self.resized.emit(self.width(), self.height())
 
     def open_beside(self, pet_geometry):
         """Show next to 小瓜 on 小瓜's own screen: left of it if there is room, else right.
         At the size the user last dragged it to (within the screen)."""
         area = screen_rect_for(pet_geometry.center())
         width, height = self.preferred_size or CHAT_SIZE
-        self._placing = True
+        self._dragged = False                        # a click on an edge that resized nothing: not saved
         self.resize(max(CHAT_MIN[0], min(width, area.width() - 20)),
                     max(CHAT_MIN[1], min(height, area.height() - 20)))
-        self._placing = False
         x = pet_geometry.left() - self.width() + 10
         if x < area.left():
             x = pet_geometry.right() - 10

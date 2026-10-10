@@ -143,3 +143,11 @@ def test_the_bubbles_wrap_to_the_windows_width(pet):
     assert long.body.width() == 600 - chat.BUBBLE_SIDES and short.body.width() < 100     # short ones stay short
     later = panel.add_notice("新消息" * 40)
     assert later.body.width() == 600 - chat.BUBBLE_SIDES
+
+
+def test_just_opening_the_chat_saves_no_size(pet):
+    """Only dragging an edge is the user's choice; opening (and Qt's own sizing) is not."""
+    pet.chat.hide()
+    pet.open_chat()
+    QTest.qWait(600)
+    assert Config.load().chat_size is None and not pet.chat._size_timer.isActive()
