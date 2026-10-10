@@ -195,7 +195,8 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.pages, 1)
 
         self._signals = _Signals()
-        self._signals.checked.connect(self._show_check)
+        self._signals.checked.connect(self._checked)
+        self._untested_key = None          # (provider, key) typed in the box and being tested
 
     # helpers --------------------------------------------------------------
     def _page(self, title: str, subtitle: str) -> tuple[QWidget, QFormLayout]:
@@ -416,7 +417,9 @@ class SettingsWindow(QWidget):
 
     def _test(self):
         preset = self.config.preset
-        key = self.key_edit.text().strip() or cfg.api_key(preset.id)[0]
+        typed = self.key_edit.text().strip()
+        key = typed or cfg.api_key(preset.id)[0]
+        self._untested_key = (preset.id, typed) if typed else None
         if preset.needs_key and not key:
             self._show_check(False, "还没有密钥可测", [])
             return
@@ -429,6 +432,24 @@ class SettingsWindow(QWidget):
             ok, message, available = check_connection(key, model, provider_id, base_url)
             self._signals.checked.emit(ok, message, [provider_id] + available)
         threading.Thread(target=work, daemon=True).start()
+
+    def _checked(self, ok: bool, message: str, available: list):
+        """The test is back. A key that was only typed in the box (not saved) and works is saved now:
+        「连上了」 and still offline, because 保存密钥 was never pressed, was a trap."""
+        pending, self._untested_key = self._untested_key, None
+        if ok and pending and pending[0] == self.config.provider and self.key_edit.text().strip() == pending[1]:
+            try:
+                cfg.store_api_key(pending[1], pending[0])
+            except OSError as error:
+                message += f"；但密钥没存上：{error}"
+            else:
+                self.key_edit.clear()
+                self._refresh_key()
+                message += "；密钥也已保存，小瓜现在就能用"
+                self.key_changed.emit()
+        elif not ok and pending:
+            message += "（这个密钥还没保存）"
+        self._show_check(ok, message, available)
 
     def _show_check(self, ok: bool, message: str, available: list):
         self.check_result.setStyleSheet(f"color: {GOOD if ok else BAD};")

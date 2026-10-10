@@ -278,3 +278,43 @@ def test_the_about_page_opens_the_terms_and_privacy_text():
     assert "查看使用协议与隐私说明" in labels
     text = (meihua.ROOT / "PRIVACY.txt").read_text(encoding="utf-8-sig")
     assert "不收集" in text and r"%APPDATA%\MeiriYigua" in text and "CC BY-NC 4.0" in text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Credential Manager is Windows-only")
+def test_a_key_that_passes_the_test_is_saved_too(monkeypatch):
+    """「测试并获取模型列表」 with a key only typed in the box said 连上了 but saved nothing: still offline."""
+    from PySide6.QtTest import QTest
+
+    from meihua.companion import agent as agent_module
+    monkeypatch.setattr(agent_module, "check_connection",
+                        lambda key, model, provider, base_url: (key == "sk-good-key-1234567890", "连上了", []))
+    app = companion.Companion(config.Config.load())
+    monkeypatch.setattr(companion, "build_agent", lambda cfg: ("real-agent", None))
+    window = app.settings
+    window.key_edit.setText("sk-wrong-key-123456789")
+    window._test()
+    for _ in range(100):                                                   # the check runs in a thread
+        QTest.qWait(50)
+        if "正在连接" not in window.check_result.text():
+            break
+    assert config.api_key(window.config.provider)[0] is None and "还没保存" in window.check_result.text()
+    window.key_edit.setText("sk-good-key-1234567890")
+    window._test()
+    for _ in range(100):                                                   # the check runs in a thread
+        QTest.qWait(50)
+        if "正在连接" not in window.check_result.text():
+            break
+    assert config.api_key(window.config.provider)[0] == "sk-good-key-1234567890"
+    assert "已保存" in window.check_result.text() and window.key_edit.text() == ""
+    assert app.pet.agent == "real-agent"                                   # 小瓜 is online right away
+
+
+def test_coming_online_is_said_in_the_chat(monkeypatch):
+    app = companion.Companion(config.Config.load())
+    assert isinstance(app.pet.agent, companion.OfflineAgent)
+    monkeypatch.setattr(companion, "build_agent", lambda cfg: (type("A", (), {"history": []})(), None))
+    app.rebuild_agent()
+    assert "接上" in app.pet.chat.transcript()[-1][1]
+    count = len(app.pet.chat.transcript())
+    app.rebuild_agent()                                                    # online to online: nothing more
+    assert len(app.pet.chat.transcript()) == count

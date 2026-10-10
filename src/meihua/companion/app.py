@@ -1697,8 +1697,14 @@ class Companion(QObject):
         history = getattr(self.pet.agent, "history", None)
         if history and hasattr(agent, "history"):
             agent.history = history                 # switching model keeps the conversation
+        was_offline = isinstance(self.pet.agent, OfflineAgent)
         self.pet.agent = agent
         self.notice = notice
+        if was_offline and not isinstance(agent, OfflineAgent):
+            # The chat may still show 「还没设置 API key」 from before: say plainly that it is connected now.
+            text = f"接上 **{self.config.preset.name}** 了，现在可以细问了 🍉"
+            self.pet.chat.add_notice(text, self.pet.session.log_message("xiaogua", text))
+            self.pet._say(text, 8)
 
     def set_mini(self, on: bool):
         """贴边小球 from the tray or the settings (the pet's own menu goes straight to the pet)."""
