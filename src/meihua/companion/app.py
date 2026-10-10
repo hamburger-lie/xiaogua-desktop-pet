@@ -18,6 +18,7 @@ import json
 import sys
 import math
 import os
+import re
 import threading
 import time
 from datetime import date, datetime
@@ -160,6 +161,9 @@ MOTIONS = {
     "思考出": ("once", ["思考出"]),
     "翻书": ("loop", ["翻书", "小瓜_思考.gif"]),
     "起卦": ("once", ["起卦"]),
+    # At the desk with the scroll open, brush moving: after a cast, until the answer comes.
+    # 「起卦#6-8@170」: frames 6 to 8 of 起卦, back and forth, 170 ms each.
+    "卦中": ("loop", ["起卦#6-8@170", "思考", "小瓜_思考.gif"]),
     "招手": ("once", ["招手"]),
     "灵光一闪": ("once", ["灵光一闪"]),
     "摇头": ("once", ["摇头"]),
@@ -185,6 +189,7 @@ AMBIENT = {
     "睡着": (4.8, 0.024, 0.0),
     "思考": (2.6, 0.010, 0.0),
     "翻书": (3.0, 0.010, 0.0),
+    "卦中": (3.0, 0.008, 0.0),
     "悬空": (1.5, 0.008, 0.0),
 }
 SWING_STATES = ("提起", "悬空", "落地")   # drawn turned by the live swing while it is not zero
@@ -198,6 +203,7 @@ STEP_MOTIONS = {
     "almanac_day": "翻书", "almanac_pick_days": "翻书", "daily_reading": "起卦",
 }
 BUSY_LOOP = "思考"            # between steps, and after a one-shot step motion
+CAST_LOOP = "卦中"            # … once this answer has cast a reading: 小瓜 stays at the scroll
 HOLD_MS = 1600                # a held pose (歪头) lasts this long when something is queued after it
 REMIND_MS = 20_000            # how often 小瓜 looks for a reminder whose minute has come
 REMIND_FIRST_MS = 5_000       # … and the first look after starting (one missed while closed)
@@ -208,6 +214,20 @@ VOICE_KEYS_UP_MS = 2000       # 按键说话 waits at most this long for Ctrl/Al
 MOOD_MOTIONS = {"开心": "点头", "加油": "加油", "担心": "摇头", "犹豫": "歪头", "平静": None}
 
 
+_PART = re.compile(r"^(.+?)#(\d+)-(\d+)(?:@(\d+))?$")     # 「起卦#6-8@170」
+
+
+def _frames_part(folder, size, part) -> list:
+    """Frames first..last of a folder, played back and forth (so the loop has no seam)."""
+    first, last = int(part.group(2)), int(part.group(3))
+    frames = _png_sequence(folder, size, FRAME_MS)[first - 1:last]
+    if part.group(4):
+        frames = [(pixmap, int(part.group(4))) for pixmap, _ in frames]
+    if len(frames) > 2:
+        frames += frames[-2:0:-1]
+    return frames
+
+
 def load_motions(size: int = ART_PX, skin: str | None = None) -> dict:
     """state -> (kind, frames or None, which source was used)."""
     motions = {}
@@ -215,8 +235,11 @@ def load_motions(size: int = ART_PX, skin: str | None = None) -> dict:
     for state, (kind, sources) in MOTIONS.items():
         frames, used = None, None
         for folder, source in ((f, src) for src in sources for f in folders):
-            path = folder / source
-            if source == "@avatar":
+            part = _PART.match(source)
+            path = folder / (part.group(1) if part else source)
+            if part and path.is_dir() and any(path.glob("*.png")):
+                frames, used = _frames_part(path, size, part), source
+            elif source == "@avatar":
                 frames, used = load_avatar(size), source
             elif path.is_dir() and any(path.glob("*.png")):
                 frames, used = _png_sequence(path, size, FRAME_MS), (
@@ -645,6 +668,7 @@ class Pet(QWidget):
         self.listen_timer.timeout.connect(self._stop_listening)
         self._dragging = False
         self._answer_started = False
+        self._cast_this_turn = False           # this answer has cast a reading: 卦中 between steps
         self.idle_timer = QTimer(self, singleShot=True)
         self.idle_timer.timeout.connect(self._settle)
         self.sleep_timer = QTimer(self, singleShot=True)
@@ -1074,6 +1098,7 @@ class Pet(QWidget):
         self._bubble_thinking()
         self._answer_started = False
         self.listen_timer.stop()
+        self._cast_this_turn = False
         self.play("思考入", BUSY_LOOP)
         threading.Thread(target=self._work, args=(text.strip(), self._turn, self._cancel), daemon=True).start()
 
@@ -1114,7 +1139,7 @@ class Pet(QWidget):
         self._answer_started = False               # the real answer will hold up its result again
         self._talking_until = 0.0
         if self.busy and not self._dragging and self.state in ("说话", "灵光一闪"):
-            self.play(BUSY_LOOP)
+            self.play(self._busy_loop())
 
     def _on_worker_step(self, tool_name: str):
         from .chat import STEP_LABELS
@@ -1191,15 +1216,23 @@ class Pet(QWidget):
     def on_step(self, tool_name: str):
         """The agent is about to run a tool: act it out (scroll, book…)."""
         motion = STEP_MOTIONS.get(tool_name)
+        if motion == "起卦":
+            self._cast_this_turn = True
+        elif motion is not None and self._cast_this_turn:
+            motion = CAST_LOOP                     # the reading is on the desk: 小瓜 stays at the scroll
         if not self.busy or self._dragging or motion is None or motion == self.state:
             return
         if motion in self.queue[:1] and self.state in ("起卦", "思考入"):
             return                                 # already on its way there
         kind = MOTIONS[motion][0]
         if kind == "once":
-            self.play(motion, BUSY_LOOP)
+            self.play(motion, self._busy_loop())
         else:
             self.play(motion)
+
+    def _busy_loop(self) -> str:
+        """Between steps: chin in hand, or at the scroll once this answer has cast a reading."""
+        return CAST_LOOP if self._cast_this_turn and self.has(CAST_LOOP) else BUSY_LOOP
 
     def _on_first_text(self, _delta: str):
         """The answer has started to arrive: 小瓜 holds up the result."""
@@ -1223,7 +1256,7 @@ class Pet(QWidget):
             self.play("待机")
 
     def _after_drag(self) -> str:
-        return BUSY_LOOP if self.busy else "待机"
+        return self._busy_loop() if self.busy else "待机"
 
     def _on_reply(self, reply):
         self.busy = False

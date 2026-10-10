@@ -105,14 +105,18 @@ def test_dragging_while_thinking_goes_back_to_thinking(pet):
 def test_each_step_has_its_motion(pet):
     pet.busy = True
     pet.play("思考")
-    pet.on_step("cast_now")
-    assert pet.state == "起卦"
-    finish(pet)
-    assert pet.state == "思考"
-    pet.on_step("lookup_hexagrams")
+    pet.on_step("lookup_hexagrams")                 # no reading cast yet: the book, then the chin
     assert pet.state == "翻书"
     pet.on_step("validate_reading")
     assert pet.state == "思考"
+    pet.on_step("cast_now")
+    assert pet.state == "起卦"
+    finish(pet)
+    assert pet.state == "卦中"                       # cast: at the scroll with the brush from now on
+    pet.on_step("lookup_hexagrams")
+    assert pet.state == "卦中"
+    pet.on_step("validate_reading")
+    assert pet.state == "卦中"
 
 
 def test_steps_are_ignored_when_idle(pet):

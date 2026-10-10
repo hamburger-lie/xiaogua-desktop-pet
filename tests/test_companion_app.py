@@ -230,3 +230,35 @@ def test_pet_is_bigger_by_default_and_size_is_remembered():
     assert pet.width() == companion.PET_MAX                # clamped
     again = companion.Pet(companion.OfflineAgent(), "Ctrl+Alt+X")
     assert again.width() == companion.PET_MAX              # restored from settings
+
+
+def test_the_scroll_loop_is_the_end_of_the_cast(monkeypatch):
+    pet = companion.Pet(companion.OfflineAgent(), "Ctrl+Alt+X")
+    kind, frames, source = pet.motions["卦中"]
+    cast = pet.motions["起卦"][1]
+    assert kind == "loop" and source == "起卦#6-8@170"
+    assert [f[0].cacheKey() for f in frames] == [cast[i][0].cacheKey() for i in (5, 6, 7, 6)]   # 6 7 8 7 | 6 …
+    assert {f[1] for f in frames} == {170}
+
+
+def test_after_a_cast_xiaogua_stays_at_the_scroll_until_the_answer(monkeypatch):
+    """It cast for 0.7 s, then went back to 托腮 for 核对证据 and the writing: the user saw no 起卦."""
+    monkeypatch.setattr(companion.threading, "Thread",
+                        lambda target, args, daemon: type("T", (), {"start": lambda self: None})())
+    pet = companion.Pet(companion.OfflineAgent(), "Ctrl+Alt+X")
+    pet._submit("我今年仕途怎么样")
+    assert pet.queue == ["思考"]                                    # nothing cast yet: chin in hand
+    pet.bridge.step.emit(pet._turn, "daily_reading")
+    assert pet.state == "起卦" and pet.queue == ["卦中"]             # opens the scroll, then keeps writing
+    pet.play("卦中")
+    for tool in ("lookup_hexagrams", "validate_reading", "almanac_day"):
+        pet.bridge.step.emit(pet._turn, tool)
+        assert pet.state == "卦中"                                   # not off to the book or the chin
+    pet.bridge.delta.emit(pet._turn, "要先")
+    pet.bridge.discard.emit(pet._turn)                              # that text was not the answer
+    assert pet.state == "卦中"
+    from meihua.companion.agent import Reply
+    pet.bridge.replied.emit(pet._turn, Reply("今年稳中有升。", True))
+    pet._submit("今天几点出门好")                                     # the next question starts afresh
+    pet.bridge.step.emit(pet._turn, "almanac_day")
+    assert pet.state == "翻书"
