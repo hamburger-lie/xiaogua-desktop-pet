@@ -129,17 +129,50 @@ def test_the_ball_docks_at_the_edge_and_comes_back(pet):
     assert pet.width() == pet.config.pet_size and not Config.load().mini
 
 
-def test_the_voice_key_listens_then_sends(pet, monkeypatch):
+def test_the_voice_key_talks_into_the_bubble(pet, monkeypatch):
+    from PySide6.QtTest import QTest
+    presses, asked = [], []
+    monkeypatch.setattr(type(pet), "_press_voice_typing", staticmethod(lambda: presses.append(1)))
+    pet.bubble.asked.connect(asked.append)
+    pet.voice_toggle()
+    QTest.qWait(350)
+    assert pet._listening and pet.bubble.asking and not pet.chat.isVisible() and presses == [1]
+    assert "在听" in pet.bubble.input.placeholderText() and "在听" in pet.bubble.label.text()   # plain to see
+    assert pet.state == "歪头"
+    pet.bubble.input.setText("今天宜什么")                                  # what Windows voice typing wrote
+    pet.voice_toggle()
+    QTest.qWait(900)
+    assert not pet._listening and presses == [1, 1] and asked == ["今天宜什么"]
+    assert pet.busy and pet.bubble.following_answer                         # 小瓜 works on it in the bubble
+
+
+def test_win_h_waits_for_the_hotkeys_ctrl_alt_to_be_let_go(pet, monkeypatch):
+    from PySide6.QtTest import QTest
+
+    from meihua.companion import hotkeys
+    held, presses = [True], []
+    monkeypatch.setattr(hotkeys, "modifiers_held", lambda: held[0])
+    monkeypatch.setattr(type(pet), "_press_voice_typing", staticmethod(lambda: presses.append(1)))
+    pet.voice_toggle()
+    QTest.qWait(400)
+    assert presses == []                                                    # Ctrl+Alt still down: not yet
+    held[0] = False
+    QTest.qWait(250)
+    assert presses == [1]
+
+
+def test_with_the_chat_open_the_voice_key_uses_the_chat(pet, monkeypatch):
     from PySide6.QtTest import QTest
     presses, sent = [], []
     monkeypatch.setattr(type(pet), "_press_voice_typing", staticmethod(lambda: presses.append(1)))
     pet.chat.submitted.connect(lambda *args: sent.append(args[0]))
+    pet.open_chat()
     pet.voice_toggle()
     QTest.qWait(350)
     assert pet._listening and pet.chat.isVisible() and presses == [1] and "在听" in pet.chat.edit.placeholderText()
-    pet.chat.edit.setPlainText("今天宜什么")                                # what Windows voice typing wrote
+    pet.chat.edit.setPlainText("今天宜什么")
     pet.voice_toggle()
-    QTest.qWait(650)
+    QTest.qWait(900)
     assert not pet._listening and presses == [1, 1] and sent == ["今天宜什么"]
 
 

@@ -1,8 +1,8 @@
 """The 每日一瓜 chat panel: one window for the whole conversation.
 
-Replaces the separate ask card + answer bubble. It sits beside 小瓜 on 小瓜's
-own screen, keeps the conversation's messages and shows what 小瓜 is doing
-while it works.
+It sits beside 小瓜 on 小瓜's own screen, keeps the conversation's messages and
+shows what 小瓜 is doing while it works. A quick question can also be asked in
+the bubble over 小瓜's head (app.Bubble); it lands in the same conversation.
 """
 
 from __future__ import annotations
@@ -57,6 +57,8 @@ QFrame#mine {{ background: {MINE}; border: none; border-radius: 14px; border-top
 QFrame#error {{ background: {ERROR_BG}; border: 1px solid {ERROR_LINE}; border-radius: 14px;
                border-top-left-radius: 4px; }}
 QLabel#body {{ font-size: 13px; line-height: 150%; background: transparent; }}
+QPushButton#feedback {{ border: none; background: transparent; color: {MUTED}; font-size: 11px; padding: 0 2px; }}
+QPushButton#feedback:hover {{ color: {LEAF_DARK}; text-decoration: underline; }}
 QPushButton#chip {{ border: 1px solid {LINE}; border-radius: 13px; padding: 4px 12px; background: {CARD};
                    font-size: 12px; }}
 QPushButton#chip:hover {{ background: #EEF3E3; border-color: {LEAF}; }}
@@ -110,6 +112,23 @@ def screen_rect_for(point: QPoint):
     return screen.availableGeometry()
 
 
+def shown_answer(text: str) -> str:
+    """Streamed answer text as it may be shown: no mood tag (whole or half-arrived), no dash flashes."""
+    return harness.polish(_TRAILING_TAG.sub("", text))[0]
+
+
+def bring_to_front(window: QWidget):
+    """Raise and activate a window so typing goes into it.
+
+    Windows lets 小瓜 take the keyboard right after the user pressed its hotkey (registered
+    with the system, hotkeys.py) or clicked its tray icon or itself. No tricks beyond that:
+    joining another program's input queue (AttachThreadInput) froze 小瓜 for seconds when
+    that program was busy, and Windows put blank 「未响应」 frames in its place.
+    """
+    window.raise_()
+    window.activateWindow()
+
+
 class Avatar(QLabel):
     def __init__(self, pixmap: QPixmap | None, size: int):
         super().__init__()
@@ -138,8 +157,9 @@ class Message(QFrame):
                  msg_id: str | None = None, reply_to: str | None = None):
         super().__init__()
         self.kind = kind
-        self.msg_id, self.reply_to = msg_id, reply_to
         self.menu_handler = None                   # set by the panel: the right-click menu
+        self.feedback_handler = None               # set by the panel: 「反馈」 under an answer
+        self.feedback_button: QPushButton | None = None
         self.setObjectName("error" if kind == "error" else "mine" if kind == "mine" else "xiaogua")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 9, 12, 9)
@@ -158,12 +178,23 @@ class Message(QFrame):
         self.set_text(text)
         self.body.setVisible(bool(text) or kind == "typing")
         layout.addWidget(self.body)
+        self.set_ids(msg_id, reply_to)
         if kind == "typing":
             self._dots = 0
             self._base = text
             self._timer = QTimer(self, interval=400)
             self._timer.timeout.connect(self._tick)
             self._timer.start()
+
+    def set_ids(self, msg_id: str | None, reply_to: str | None):
+        """An answer to a question (not a notice or a reminder) gets a small 「反馈」 under it."""
+        self.msg_id, self.reply_to = msg_id, reply_to
+        if self.kind == "xiaogua" and msg_id and reply_to and self.feedback_button is None:
+            self.feedback_button = QPushButton("反馈", objectName="feedback")
+            self.feedback_button.setCursor(Qt.PointingHandCursor)
+            self.feedback_button.setToolTip("这条回答不对？反馈给作者")
+            self.feedback_button.clicked.connect(lambda: self.feedback_handler and self.feedback_handler(self))
+            self.layout().addWidget(self.feedback_button, alignment=Qt.AlignRight)
 
     def set_step(self, text: str):
         self._base = text
@@ -272,6 +303,7 @@ class ChatPanel(QWidget):
     delete_requested = Signal(str)             # message id: 删除
     recall_requested = Signal(str)             # message id of my latest question: 撤回
     retry_requested = Signal(str)              # message id of 小瓜's latest answer or error: 重新回答
+    feedback_requested = Signal(str)           # message id of one of 小瓜's answers: 反馈这条回答
     stop_requested = Signal()                  # the stop button while 小瓜 is answering
     chats_requested = Signal()                 # the 对话 button: the pet answers with show_chat_list
     chat_picked = Signal(str)                  # conversation id
@@ -396,6 +428,11 @@ class ChatPanel(QWidget):
         chips.addStretch()
         return row_widget
 
+    @property
+    def today_text(self) -> str:
+        """The morning line on the welcome card (the bubble's input box shows it too)."""
+        return self._today_text
+
     def set_today(self, text: str | None):
         self._today_text = text or ""
         self.today_line.setText(self._today_text)
@@ -423,7 +460,8 @@ class ChatPanel(QWidget):
         row.setContentsMargins(4, 4, 4, 4)
         row.setSpacing(4)
         self.edit = QPlainTextEdit()
-        self.edit.setPlaceholderText("问小瓜…")
+        self._hint = ""
+        self.set_hint("问小瓜…")
         self.edit.setTabChangesFocus(True)
         self.edit.setFixedHeight(32)
         self.edit.textChanged.connect(self._fit_input)
@@ -453,7 +491,16 @@ class ChatPanel(QWidget):
             elif event.type() in (event.Type.FocusIn, event.Type.FocusOut):
                 self.composer.setProperty("focused", event.type() == event.Type.FocusIn)
                 self.composer.setStyle(self.composer.style())
+            elif event.type() == event.Type.InputMethod:
+                # Pinyin still being typed is not in the document yet, and QPlainTextEdit would
+                # draw the grey hint right under it: put the hint away while there is any.
+                self.edit.setPlaceholderText("" if event.preeditString() else self._hint)
         return super().eventFilter(watched, event)
+
+    def set_hint(self, text: str):
+        """The grey hint in the empty input box."""
+        self._hint = text
+        self.edit.setPlaceholderText(text)
 
     def _fit_input(self):
         if self.edit.toPlainText().strip():
@@ -466,10 +513,10 @@ class ChatPanel(QWidget):
             return
         text = (self.edit.toPlainText() if text is None else text).strip()
         if not text:
-            self.edit.setPlaceholderText("先写一句想问的～")
+            self.set_hint("先写一句想问的～")
             return
         self.edit.clear()
-        self.edit.setPlaceholderText("问小瓜…")
+        self.set_hint("问小瓜…")
         self.submitted.emit(text)
 
     # conversation ----------------------------------------------------------
@@ -490,6 +537,7 @@ class ChatPanel(QWidget):
         self.feed_layout.addWidget(holder)
         widget.holder = holder
         widget.menu_handler = self._message_menu
+        widget.feedback_handler = lambda message: self.feedback_requested.emit(message.msg_id)
         self._stick_to_end = True
         self._scroll_to_end()
         return widget
@@ -531,6 +579,8 @@ class ChatPanel(QWidget):
                     and not self.busy):
                 menu.addAction("重新回答" if message.kind == "xiaogua" else "重试",
                                lambda: self.retry_requested.emit(message.msg_id))
+            if message.feedback_button is not None:
+                menu.addAction("反馈这条回答…", lambda: self.feedback_requested.emit(message.msg_id))
             menu.addSeparator()
             menu.addAction("删除", lambda: self.delete_requested.emit(message.msg_id))
         self._menu = menu                                    # keep it alive while shown
@@ -567,7 +617,7 @@ class ChatPanel(QWidget):
 
     def set_listening(self, on: bool):
         """按键说话: say so in the box while Windows voice typing listens."""
-        self.edit.setPlaceholderText("在听……说完再按一次快捷键就发出去" if on else "问小瓜…")
+        self.set_hint("在听……说完再按一次快捷键就发出去" if on else "问小瓜…")
         self._set_status("在听…" if on else "")
 
     def _set_status(self, text: str):
@@ -602,8 +652,7 @@ class ChatPanel(QWidget):
 
     def _flush_draft(self):
         if self.draft is not None:
-            shown = _TRAILING_TAG.sub("", self._draft_text)       # the mood tag, whole or half-arrived
-            shown = harness.polish(shown)[0]                       # no dash flashes on screen either
+            shown = shown_answer(self._draft_text)
             self.draft.set_text(shown)
             self.draft.body.setVisible(bool(shown))
             self._stick_to_end = True
@@ -653,7 +702,7 @@ class ChatPanel(QWidget):
             message, self.draft, self._draft_text = self.draft, None, ""
             message.set_text(text)
             message.body.setVisible(True)
-            message.msg_id, message.reply_to = msg_id, reply_to
+            message.set_ids(msg_id, reply_to)
             self._stick_to_end = True
             self._scroll_to_end()
             return message
@@ -731,8 +780,7 @@ class ChatPanel(QWidget):
         y = max(area.top(), min(y, area.bottom() - self.height()))
         self.move(x, y)
         self.show()
-        self.raise_()
-        self.activateWindow()
+        bring_to_front(self)
         self.edit.setFocus()
 
     def keyPressEvent(self, event):

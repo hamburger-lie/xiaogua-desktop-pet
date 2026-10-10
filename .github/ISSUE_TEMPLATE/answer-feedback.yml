@@ -1,0 +1,25 @@
+name: 反馈一条回答
+description: 小瓜哪条回答说得不对、答非所问或者太长？在对话框里点那条回答下面的「反馈」，把复制好的内容贴在这里。
+title: "[回答反馈] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        谢谢你帮小瓜变得更靠谱 🍉
+
+        **这里的内容是公开的，任何人都能看到。** 提交前看一眼，别留下真名、电话、地址这类不想公开的信息。
+  - type: textarea
+    id: content
+    attributes:
+      label: 反馈内容
+      description: 在小瓜里点「复制并打开 GitHub」后，直接按 Ctrl+V 粘贴到这里。
+      placeholder: |
+        问题类型：……
+
+        【我的问题】
+        ……
+
+        【小瓜的回答】
+        ……
+    validations:
+      required: true

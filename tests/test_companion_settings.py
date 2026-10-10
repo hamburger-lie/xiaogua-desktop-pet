@@ -129,7 +129,52 @@ def test_changing_the_hotkey_restarts_the_listener():
     app.config.hotkey = "<ctrl>+<shift>+x"
     app.apply(app.config)
     assert first.stopped and app.listener.combo == "<ctrl>+<shift>+x"
-    assert "Ctrl+Shift+X" in app.tray_actions["chat"].text()
+    assert "Ctrl+Shift+X" in app.tray_actions["ask"].text()
+
+
+def test_a_click_on_the_tray_icon_calls_xiaogua_out_and_never_hides_it():
+    from PySide6.QtWidgets import QSystemTrayIcon
+    app = companion.Companion(config.Config.load())
+    app.start(quiet=True)
+    app._tray_clicked(QSystemTrayIcon.Trigger)
+    assert app.pet.isVisible() and app.pet.bubble.asking                      # was: the click hid 小瓜
+    app._tray_clicked(QSystemTrayIcon.Trigger)
+    assert app.pet.isVisible()
+    app.toggle_pet()                                                          # 隐藏小瓜 from the menu
+    assert not app.pet.isVisible() and app.tray_actions["toggle"].text() == "显示小瓜"
+    app._tray_clicked(QSystemTrayIcon.Trigger)
+    assert app.pet.isVisible() and app.tray_actions["toggle"].text() == "隐藏小瓜"
+
+
+def test_hotkey_strings_become_windows_key_codes():
+    from meihua.companion import hotkeys
+    from meihua.companion.settings_window import _SPECIAL
+    assert hotkeys.parse("<ctrl>+<alt>+x") == (hotkeys.MOD_CONTROL | hotkeys.MOD_ALT, 0x58)
+    assert hotkeys.parse("<ctrl>+<alt>+v") == (hotkeys.MOD_CONTROL | hotkeys.MOD_ALT, 0x56)
+    assert hotkeys.parse("<f8>") == (0, 0x77)
+    assert hotkeys.parse("<cmd>+<shift>+<space>") == (hotkeys.MOD_WIN | hotkeys.MOD_SHIFT, 0x20)
+    for bad in ("<ctrl>+<alt>", "<ctrl>+<bogus>", "<ctrl>+é"):
+        with pytest.raises(ValueError):
+            hotkeys.parse(bad)
+    keys = [Qt.Key(Qt.Key_F1 + n) for n in range(24)] + list(_SPECIAL) + \
+           [Qt.Key(Qt.Key_A + n) for n in range(26)] + [Qt.Key(Qt.Key_0 + n) for n in range(10)]
+    for key in keys:                                       # anything the settings can record can be registered
+        combo = to_pynput(Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier | Qt.MetaModifier, key)
+        assert hotkeys.parse(combo)[1] > 0
+
+
+def test_a_hotkey_another_program_has_is_said_out_loud(monkeypatch):
+    class Taken(FakeListener):
+        failed = ["<ctrl>+<alt>+v"]
+    monkeypatch.setattr(companion, "start_hotkey", lambda combo, bridge, voice=None: Taken(combo))
+    app = companion.Companion(config.Config.load())
+    assert "Ctrl+Alt+V" in app.settings.hotkey_status.text() and "占用" in app.settings.hotkey_status.text()
+    app.start(quiet=True)
+    assert "占用" in app.pet.bubble.toPlainText() and "API key" in app.pet.chat.transcript()[0][1]
+    monkeypatch.setattr(companion, "start_hotkey", lambda combo, bridge, voice=None: FakeListener(combo))
+    app.config.voice_hotkey = "<ctrl>+<alt>+b"                          # the user picks another one
+    app.apply(app.config)
+    assert "占用" not in app.settings.hotkey_status.text() and app.hotkey_problem is None
 
 
 def test_a_bad_hotkey_is_reported_not_raised(monkeypatch):

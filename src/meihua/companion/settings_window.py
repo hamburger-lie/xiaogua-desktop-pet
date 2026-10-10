@@ -141,7 +141,7 @@ class HotkeyButton(QPushButton):
         self.setText(hotkey_label(self.combo))
 
     def keyPressEvent(self, event):
-        if not self.keyboardGrabber() is self:
+        if self.keyboardGrabber() is not self:
             return super().keyPressEvent(event)
         if event.key() == Qt.Key_Escape:
             self._stop()
@@ -677,11 +677,14 @@ class SettingsWindow(QWidget):
         self.hotkey_button = HotkeyButton(self.config.hotkey)
         self.hotkey_button.recorded.connect(lambda combo: self._set("hotkey", combo))
         form.addRow("叫出小瓜", self.hotkey_button)
+        form.addRow("", self._hint("按一下，小瓜头顶冒出输入框，打字回车就问，回答也冒在气泡里；"
+                                   "再按一下收起。想看完整对话就单击小瓜。"))
         self.voice_button = HotkeyButton(self.config.voice_hotkey)
         self.voice_button.recorded.connect(lambda combo: self._set("voice_hotkey", combo))
         form.addRow("按键说话", self.voice_button)
         form.addRow("", self._hint("按一下开始说（用 Windows 自带的语音输入，第一次要在系统里允许麦克风），"
-                                   "说完再按一下就发给小瓜；小瓜回答时按它会先打断。"))
+                                   "说完再按一下就发给小瓜，回答冒在气泡里；对话框开着时就在对话框里。"
+                                   "小瓜回答时按它会先打断。"))
         self.hotkey_status = self._hint("点一下按钮，再按新的组合键。")
         form.addRow("", self.hotkey_status)
 
@@ -696,6 +699,10 @@ class SettingsWindow(QWidget):
     def hotkey_failed(self, message: str):
         self.hotkey_status.setText(message)
         self.hotkey_status.setStyleSheet(f"color: {BAD}; font-size: 12px;")
+
+    def hotkey_ok(self):
+        self.hotkey_status.setText("点一下按钮，再按新的组合键。")
+        self.hotkey_status.setStyleSheet("")
 
     def _toggle_autostart(self, on: bool):
         try:

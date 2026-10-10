@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """每日一瓜 desktop app: 小瓜 floating on the desktop, with a chat panel.
 
-A frameless, always-on-top, transparent window showing 小瓜. Click 小瓜 (or press
-the hotkey, default Ctrl+Alt+X) to open the chat (chat.py). Answers, progress and
-errors all appear in the chat.
+A frameless, always-on-top, transparent window showing 小瓜. Click 小瓜 to open the
+chat (chat.py), which keeps the whole conversation. The hotkey (default Ctrl+Alt+X)
+or the tray icon opens a small input box in the bubble over 小瓜's head instead;
+while the chat is closed, 小瓜's work and answer show in that bubble.
 
 Motions follow voice/xiaogua-motion-design.md. New artwork dropped into
 assets/xiaogua/<动作名>/ as PNG frames is picked up on restart; until then each
@@ -201,6 +202,7 @@ HOLD_MS = 1600                # a held pose (歪头) lasts this long when someth
 REMIND_MS = 20_000            # how often 小瓜 looks for a reminder whose minute has come
 REMIND_FIRST_MS = 5_000       # … and the first look after starting (one missed while closed)
 REMIND_BUBBLE_S = 30          # a reminder stays up this long
+VOICE_KEYS_UP_MS = 2000       # 按键说话 waits at most this long for Ctrl/Alt to be let go
 
 # The answer's mood tag (agent.MOODS) -> what 小瓜 does once the answer is in.
 MOOD_MOTIONS = {"开心": "点头", "加油": "加油", "担心": "摇头", "犹豫": "歪头", "平静": None}
@@ -298,25 +300,89 @@ class Bridge(QObject):
 
 # ---------------------------------------------------------------- bubble
 
+BUBBLE_WIDTH = 300            # an answer's bubble; short notices keep to NOTE_WIDTH
+NOTE_WIDTH = 260
+BUBBLE_CHARS = 260            # longer answers are cut in the bubble; the chat panel has them whole
+BUBBLE_STREAM_MS = 120        # the streamed answer is redrawn at most this often
+ASK_IDLE_S = 60               # an input box left empty this long goes away
+ASK_AWAY_S = 10               # … or this long once the user is in another window
+
+
+def bubble_text(text: str, limit: int = BUBBLE_CHARS) -> str:
+    """An answer short enough for the bubble: cut at the last sentence end before `limit`."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max(head.rfind(mark) for mark in "。！？；\n")
+    head = head[:cut + 1] if cut > limit // 2 else head
+    return head.rstrip() + "……\n\n*（点我看完整回答）*"
+
+
+def answer_seconds(text: str) -> int:
+    """How long an answer stays over 小瓜's head: time to read it, 12 s to a minute."""
+    return max(12, min(60, len(text) // 5))
+
+
 class Bubble(QWidget):
-    """A short speech bubble above 小瓜 for one-line notices (greeting, 'I'm here').
-    Conversations happen in the chat panel; this only says hello and hides itself."""
+    """The speech bubble above 小瓜.
+
+    Short notices (greeting, a reminder, 'I'm here'), and talking without the chat panel:
+    `ask` turns it into a little input box, `thinking` shows what 小瓜 is doing, `stream`
+    and `answer` show the reply. Clicking a notice or an answer opens the chat panel,
+    which has the whole conversation.
+    """
+    asked = Signal(str)          # the user typed a question into the bubble
 
     def __init__(self, on_click=None):
+        from PySide6.QtWidgets import QLineEdit
+
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.on_click = on_click
+        self.mode = "note"                               # note / ask / thinking / answer
         self.setAttribute(Qt.WA_TranslucentBackground)
+        font = "font-family: 'Microsoft YaHei';"
         self.label = QLabel(self)
         self.label.setWordWrap(True)
         self.label.setTextFormat(Qt.MarkdownText)
-        self.label.setStyleSheet(f"color: {INK.name()}; font-family: 'Microsoft YaHei'; font-size: 13px;"
-                                 "background: transparent;")
-        self.label.setMaximumWidth(260)
+        self.label.setStyleSheet(f"color: {INK.name()}; {font} font-size: 13px; background: transparent;")
+        self.label.setMaximumWidth(NOTE_WIDTH)
+        self.input = QLineEdit(self)
+        self.input.setPlaceholderText("问小瓜…")
+        self.input.setMinimumWidth(240)
+        self.input.setStyleSheet(f"QLineEdit {{ {font} font-size: 13px; color: {INK.name()}; background: #FFFFFF;"
+                                 " border: 1px solid #C9D3B5; border-radius: 12px; padding: 5px 10px; }"
+                                 " QLineEdit:focus { border-color: #8FAE72; }")
+        self.input.returnPressed.connect(self.send)
+        self.input.installEventFilter(self)
+        self.input.hide()
+        self.footer = QLabel(self)
+        self.footer.setStyleSheet(f"color: #8C9687; {font} font-size: 11px; background: transparent;")
+        self.footer.hide()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 18)        # bottom: room for the tail
+        layout.setSpacing(6)
         layout.addWidget(self.label)
+        layout.addWidget(self.input)
+        layout.addWidget(self.footer)
         self.hide_timer = QTimer(self, singleShot=True)
         self.hide_timer.timeout.connect(self.hide)
+        self._paused = False                             # the mouse is on it: the hide timer waits
+        self.hearing = False                             # 按键说话 is writing into the input box
+        self.input.textEdited.connect(self._typed)
+        self._stream = ""
+        self._stream_timer = QTimer(self, singleShot=True, interval=BUBBLE_STREAM_MS)
+        self._stream_timer.timeout.connect(self._show_stream)
+        self._pet_geometry = None
+
+    @property
+    def asking(self) -> bool:
+        return self.isVisible() and self.mode == "ask"
+
+    @property
+    def following_answer(self) -> bool:
+        """Showing 小瓜 at work or its reply (not a notice, not the input box)."""
+        return self.isVisible() and self.mode in ("thinking", "answer")
 
     # kept for callers and tests that read the bubble's text
     @property
@@ -352,20 +418,134 @@ class Bubble(QWidget):
         y = pet_geometry.top() - self.height() + 6
         self.move(max(area.left() + 4, min(x, area.right() - self.width() - 4)), max(area.top() + 4, y))
 
-    def say(self, text: str, pet_geometry, seconds: int = 8):
-        from .chat import screen_rect_for
-
-        self.label.setText(text)
+    def _show(self, mode: str, text: str, pet_geometry, seconds: int | None, footer: str = "",
+              width: int = NOTE_WIDTH):
+        """Lay the bubble out for `mode` above 小瓜. `seconds` None: stays until told otherwise."""
+        self.mode = mode
+        self._stream_timer.stop()
+        self._pet_geometry = pet_geometry
+        self.label.setMaximumWidth(width)
+        self._set_label(text)
+        self.input.setVisible(mode == "ask")
+        self.footer.setText(footer)
+        self.footer.setVisible(bool(footer))
         self.adjustSize()
-        area = screen_rect_for(pet_geometry.center())
-        x = pet_geometry.center().x() - self.width() + 40
-        y = pet_geometry.top() - self.height() + 6
-        x = max(area.left() + 4, min(x, area.right() - self.width() - 4))
-        y = max(area.top() + 4, y)
-        self.move(x, y)
+        self.follow(pet_geometry)
         self.show()
         self.raise_()
-        self.hide_timer.start(seconds * 1000)
+        if seconds is None:
+            self.hide_timer.stop()
+        else:
+            self.hide_timer.start(seconds * 1000)
+
+    def say(self, text: str, pet_geometry, seconds: int = 8):
+        """A short notice; it goes away by itself."""
+        self._show("note", text, pet_geometry, seconds)
+
+    def ask(self, pet_geometry, text: str = ""):
+        """Turn into a small input box (with an optional line above it, like today's 黄历)."""
+        from .chat import bring_to_front
+
+        self.input.clear()
+        self.listening(False)
+        self._show("ask", text, pet_geometry, ASK_IDLE_S, "Enter 发送 · Esc 收起 · 单击小瓜看完整对话",
+                   width=BUBBLE_WIDTH)
+        bring_to_front(self)
+        self.input.setFocus()
+
+    def _typed(self, text: str):
+        """Something typed: the box stays; emptied again: it goes after a quiet minute."""
+        if self.mode == "ask":
+            if text.strip() or self.hearing:
+                self.hide_timer.stop()
+            else:
+                self.hide_timer.start(ASK_IDLE_S * 1000)
+
+    def _set_label(self, text: str):
+        # A wrapped QLabel guesses a narrow width: give it the room it needs, up to its maximum.
+        longest = max((self.label.fontMetrics().horizontalAdvance(line) for line in text.splitlines()), default=0)
+        self.label.setMinimumWidth(min(self.label.maximumWidth(), longest + 4))
+        self.label.setText(text)
+        self.label.setVisible(bool(text))
+
+    def set_line(self, text: str):
+        """Change the text above the input box (or the notice) without touching what is typed."""
+        self._set_label(text)
+        self.adjustSize()
+        if self._pet_geometry is not None:
+            self.follow(self._pet_geometry)
+
+    def listening(self, on: bool):
+        """按键说话 into the bubble: Windows voice typing writes into the input box."""
+        self.hearing = on
+        self.input.setPlaceholderText("在听……说完再按一次快捷键就发出去" if on else "问小瓜…")
+        if on:
+            self.hide_timer.stop()
+
+    def thinking(self, text: str, pet_geometry):
+        self._show("thinking", text, pet_geometry, None, width=BUBBLE_WIDTH)
+
+    def stream(self, text: str, pet_geometry):
+        """The answer as it arrives (redrawn a few times a second, not on every token)."""
+        self._stream, self._pet_geometry = text, pet_geometry
+        if not self._stream_timer.isActive():
+            self._stream_timer.start()
+
+    def _show_stream(self):
+        from .chat import shown_answer
+
+        shown = shown_answer(self._stream)
+        if shown and self.mode in ("thinking", "answer") and self.isVisible():
+            self._show("answer", bubble_text(shown), self._pet_geometry, None, width=BUBBLE_WIDTH)
+
+    def answer(self, text: str, pet_geometry):
+        self._show("answer", bubble_text(text), pet_geometry, answer_seconds(text), "点我看完整对话",
+                   width=BUBBLE_WIDTH)
+
+    def send(self):
+        text = self.input.text().strip()
+        if not text:
+            self.input.setPlaceholderText("先写一句想问的～")
+            return
+        self.input.clear()
+        self.input.setPlaceholderText("问小瓜…")
+        self.asked.emit(text)
+
+    def eventFilter(self, watched, event):
+        if watched is self.input and event.type() == event.Type.KeyPress and event.key() == Qt.Key_Escape:
+            self.hide()
+            return True
+        return super().eventFilter(watched, event)
+
+    def changeEvent(self, event):
+        """Gone to another window with the input box still empty: it goes after ASK_AWAY_S, not at
+        once. Another program grabbing the focus right after the hotkey must not make the box
+        vanish (it would look as if the key did nothing). Coming back to it keeps it."""
+        super().changeEvent(event)
+        if event.type() != event.Type.ActivationChange or self.mode != "ask" or not self.isVisible():
+            return
+        if self.isActiveWindow() or self.hearing or self.input.text().strip():
+            self._typed(self.input.text())
+        else:
+            self.hide_timer.start(ASK_AWAY_S * 1000)
+
+    def enterEvent(self, _event):
+        """A notice or an answer being read: it stays."""
+        if self.mode in ("note", "answer") and self.hide_timer.isActive():
+            self.hide_timer.stop()
+            self._paused = True
+
+    def leaveEvent(self, _event):
+        if self._paused:
+            self._paused = False
+            if self.mode in ("note", "answer"):
+                self.hide_timer.start(5000)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._stream_timer.stop()
+        self.hide_timer.stop()
+        self._paused = False
 
     # old name, same behaviour
     def show_text(self, text: str, anchor=None, seconds: int = 8):
@@ -377,6 +557,9 @@ class Bubble(QWidget):
         self.say(text, pet, seconds)
 
     def mousePressEvent(self, _event):
+        if self.mode == "ask":                           # a click beside the input box: keep typing
+            self.input.setFocus()
+            return
         self.hide()
         if self.on_click:
             self.on_click()
@@ -407,6 +590,9 @@ class Pet(QWidget):
         size = max(PET_MIN, min(PET_MAX, self.config.pet_size))
         self.resize(size, size)
         self.bubble = Bubble(on_click=self.open_chat)
+        self.bubble.asked.connect(self._ask_from_bubble)
+        self.bubble.input.textEdited.connect(lambda text: text.strip() and self._on_typing())
+        self._bubble_draft, self._bubble_step = "", "小瓜在想"     # the answer as the bubble shows it
         self.chat = ChatPanel(load_avatar(96)[0][0], hotkey_label)
         self.chat.submitted.connect(self._submit)
         self.chat.clear_requested.connect(self._forget)
@@ -438,12 +624,13 @@ class Pet(QWidget):
         self.chat.recall_requested.connect(self._recall)
         self.chat.delete_requested.connect(self._delete)
         self.chat.retry_requested.connect(self._retry)
+        self.chat.feedback_requested.connect(self._feedback)
         self.chat.chats_requested.connect(
             lambda: self.chat.show_chat_list(self.session.list_chats(), self.session.chat.id))
         self.chat.chat_picked.connect(self._switch_chat)
         self.chat.chat_deleted.connect(self._delete_chat)
         self.chat.new_chat_requested.connect(self._new_chat)
-        self.bridge.hotkey.connect(self.toggle_chat)
+        self.bridge.hotkey.connect(self.hotkey_pressed)
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.PreciseTimer)      # coarse timers jitter by ~16 ms on Windows
         self.timer.timeout.connect(self._next_frame)
@@ -470,6 +657,7 @@ class Pet(QWidget):
         self._talking_until = 0.0                                   # the answer is arriving: talk bounce
         self._night_greeted = ""
         self._listening = False                                     # 按键说话 in progress
+        self._voice_in_bubble = False                               # … into the bubble, not the panel
         self._attention_until = 0.0                                 # mini ball: a reply is waiting
         self.bridge.voice.connect(self.voice_toggle)
         self.busy = False
@@ -613,7 +801,7 @@ class Pet(QWidget):
             if (life.is_night() and self._night_greeted != today and not self.chat.isVisible()
                     and life.allows(self.config.proactive, "night")):
                 self._night_greeted = today
-                self.bubble.say("这么晚还不睡呀……我陪你一会儿。", self.frameGeometry(), 6)
+                self._say("这么晚还不睡呀……我陪你一会儿。", 6)
                 return
         if not self.chat.isVisible():
             self.greet_today(bubble=self.config.greet_on_start)       # back after midnight
@@ -633,7 +821,7 @@ class Pet(QWidget):
         self.chat.set_today(text)
         kind = getattr(self.session, "greeting_kind", "morning")
         if bubble and self.isVisible() and life.allows(self.config.proactive, kind):
-            self.bubble.say(text, self.frameGeometry(), 15)
+            self._say(text, 15)
         return True
 
     def _refresh_welcome(self):
@@ -740,23 +928,53 @@ class Pet(QWidget):
 
     # 按键说话 (逗逗's walkie-talkie key) ------------------------------------------
     def voice_toggle(self):
-        """First press: open the chat and start Windows voice typing (Win+H) in the input.
-        Second press: stop it and send what was said. Pressing while 小瓜 answers interrupts it."""
+        """First press: start Windows voice typing (Win+H) into the bubble's input box, or into the
+        chat panel's when that is open. Second press: stop it and send what was said; the answer
+        comes where the question went. Pressing while 小瓜 answers interrupts it."""
+        from .chat import bring_to_front
+        from .settings_window import hotkey_label
+
         if not self._listening:
             if self.busy:
                 self.stop_answer(quiet=True)                         # speaking up interrupts
-            self.open_chat()
-            self.chat.raise_()
-            self.chat.activateWindow()
-            self.chat.edit.setFocus()
+            self._voice_in_bubble = not self.chat.isVisible()
+            if self._voice_in_bubble:
+                if not self.isVisible():
+                    self.show()
+                self.ask_in_bubble()
+                self.bubble.listening(True)
+                self.bubble.set_line(f"我在听，说吧～说完再按一次 **{hotkey_label(self.config.voice_hotkey)}**。"
+                                     "\n\n没弹出 Windows 的语音输入条的话，直接打字也行。")
+            else:
+                bring_to_front(self.chat)
+                self.chat.edit.setFocus()
+                self.chat.set_listening(True)
+            if not self._dragging:
+                self.play("歪头")                                    # listening, until the second press
             self._listening = True
-            self.chat.set_listening(True)
-            QTimer.singleShot(250, lambda: self._press_voice_typing())
+            self._when_keys_up(self._press_voice_typing)
             return
         self._listening = False
-        self.chat.set_listening(False)
-        self._press_voice_typing()                                    # closes the voice typing bar
-        QTimer.singleShot(500, lambda: self.chat.edit.toPlainText().strip() and self.chat.send())
+        if self.state == "歪头" and not self.busy:
+            self.play("点头", "待机")
+        if self._voice_in_bubble:
+            self.bubble.listening(False)
+            send = lambda: self.bubble.asking and self.bubble.input.text().strip() and self.bubble.send()  # noqa: E731
+        else:
+            self.chat.set_listening(False)
+            send = lambda: self.chat.edit.toPlainText().strip() and self.chat.send()  # noqa: E731
+        # Close the voice typing bar, then send what it wrote once it has let go of the box.
+        self._when_keys_up(lambda: (self._press_voice_typing(), QTimer.singleShot(500, send)))
+
+    def _when_keys_up(self, action, waited_ms: int = 0):
+        """Win+H must go in on its own: while the user still holds Ctrl+Alt from the hotkey,
+        Windows would read it as Ctrl+Alt+Win+H and no voice typing comes up."""
+        from .hotkeys import modifiers_held
+
+        if modifiers_held() and waited_ms < VOICE_KEYS_UP_MS:
+            QTimer.singleShot(40, lambda: self._when_keys_up(action, waited_ms + 40))
+            return
+        QTimer.singleShot(80, action)
 
     @staticmethod
     def _press_voice_typing():
@@ -771,17 +989,63 @@ class Pet(QWidget):
 
     # chat -----------------------------------------------------------------
     def open_chat(self):
+        typed = self.bubble.input.text().strip() if self.bubble.asking else ""
         self.bubble.hide()
         self.greet_today(bubble=False)
         if not self.chat.isVisible() and not self.busy and self.state in ("待机", "睡着"):
             self.play("招手", "待机")
         self.chat.open_beside(self.frameGeometry())
+        if typed and not self.chat.edit.toPlainText().strip():
+            self.chat.edit.setPlainText(typed)                       # half a question in the bubble comes along
 
     def toggle_chat(self):
         if self.chat.isVisible():
             self.chat.hide()
         else:
             self.open_chat()
+
+    # talking in the bubble (no chat panel) ---------------------------------------
+    def hotkey_pressed(self):
+        """叫出小瓜 (Ctrl+Alt+X): a box to type in, right over 小瓜's head. Pressed again it goes
+        away; with the chat panel open, the panel closes instead."""
+        if self.chat.isVisible():
+            self.chat.hide()
+        elif self.bubble.asking:
+            self.bubble.hide()
+        else:
+            self.summon()
+
+    def summon(self):
+        """Come out and listen (the hotkey, the tray icon): 小瓜 shows up if it was hidden, then the
+        chat panel comes to the front if it is open, otherwise the bubble's input box opens."""
+        from .chat import bring_to_front
+
+        if not self.isVisible():
+            self.show()
+        if self.chat.isVisible():
+            bring_to_front(self.chat)
+            self.chat.edit.setFocus()
+        else:
+            self.ask_in_bubble()
+
+    def ask_in_bubble(self):
+        first = self.greet_today(bubble=False)            # the first look today: today's line above the box
+        if not self.busy and not self._dragging and self.state in ("待机", "睡着"):
+            self.play("招手", "待机")
+        self.bubble.ask(self.frameGeometry(), self.chat.today_text if first else "")
+
+    def _ask_from_bubble(self, text: str):
+        if self.busy:
+            self.stop_answer(quiet=True)                  # a new question: the old answer stops
+        self._submit(text)
+
+    def _bubble_follows(self) -> bool:
+        """With the chat panel closed, 小瓜 works and answers in its bubble."""
+        return self.isVisible() and not self.chat.isVisible()
+
+    def _bubble_thinking(self):
+        if self._bubble_follows():
+            self.bubble.thinking(self._bubble_step + "…", self.frameGeometry())
 
     def _submit(self, text):
         if self.busy:
@@ -804,6 +1068,8 @@ class Pet(QWidget):
         self._turn += 1
         self._cancel = threading.Event()
         self.chat.start_thinking("小瓜在想")
+        self._bubble_draft, self._bubble_step = "", "小瓜在想"
+        self._bubble_thinking()
         self._answer_started = False
         self.listen_timer.stop()
         self.play("思考入", BUSY_LOOP)
@@ -840,17 +1106,31 @@ class Pet(QWidget):
 
     def _on_worker_discard(self):
         self.chat.discard_draft()
+        self._bubble_draft = ""
+        if self.bubble.following_answer:
+            self._bubble_thinking()
         self._answer_started = False               # the real answer will hold up its result again
         self._talking_until = 0.0
         if self.busy and not self._dragging and self.state in ("说话", "灵光一闪"):
             self.play(BUSY_LOOP)
 
     def _on_worker_step(self, tool_name: str):
+        from .chat import STEP_LABELS
+
         self.chat.step(tool_name)
+        self._bubble_draft = ""                    # text before a tool was not the answer
+        self._bubble_step = STEP_LABELS.get(tool_name, "正在琢磨")
+        if not self.bubble.asking:
+            self._bubble_thinking()
         self.on_step(tool_name)
 
     def _on_worker_delta(self, delta: str):
         self.chat.stream_text(delta)
+        self._bubble_draft += delta
+        if self._bubble_follows() and not self.bubble.asking:
+            if not self.bubble.following_answer:   # the panel was closed half way through
+                self._bubble_thinking()
+            self.bubble.stream(self._bubble_draft, self.frameGeometry())
         self._on_first_text(delta)
         if not self.has("说话"):                     # the code-made bounce stands in for the artwork
             self._talking_until = time.monotonic() + 0.6
@@ -868,6 +1148,8 @@ class Pet(QWidget):
         self.busy = False
         self.chat.stop_thinking()
         self.chat.discard_draft()
+        if self.bubble.following_answer:
+            self.bubble.hide()
         if not quiet:
             self.chat.add_divider("停下了")
             self.session.log_message("divider", "停下了")
@@ -935,7 +1217,7 @@ class Pet(QWidget):
             self.listen_timer.start()
 
     def _stop_listening(self):
-        if self.state == "歪头" and not self.busy:
+        if self.state == "歪头" and not self.busy and not self._listening:    # 按键说话 keeps the head tilted
             self.play("待机")
 
     def _after_drag(self) -> str:
@@ -968,11 +1250,37 @@ class Pet(QWidget):
             self.play("待机")
         self._talking_until = 0.0
         answer_id = self.session.log_message("xiaogua", text + (f"\n\n*{note}*" if note else ""),
-                                             reply_to=self._question_id)
+                                             reply_to=self._question_id, model=self._model_label(),
+                                             checks=list(getattr(reply, "checks", None) or []))
         self.chat.add_reply(text, note, answer_id, self._question_id)
         self.chat.set_stats(self.session.together_text())
-        self._notify_if_hidden("小瓜看好了，点我看回答。")
+        self._bubble_draft = ""
+        self._notify_if_hidden(answer=text + (f"\n\n*{note}*" if note else ""))
         self.idle_timer.start(self.idle_ms)
+
+    def _model_label(self) -> str:
+        """Which model answered, for 反馈这条回答: the vendor's name and the model, never its address or key."""
+        if isinstance(self.agent, OfflineAgent):
+            return "离线模式"
+        model = str(getattr(self.agent, "model", "") or "")
+        return " · ".join(part for part in (self.config.preset.name, model) if part)
+
+    def _feedback(self, answer_id: str):
+        """反馈这条回答: show what would go out; the user copies it and submits it on GitHub themselves."""
+        from .feedback import Exchange, FeedbackDialog
+
+        answer = self.session.message(answer_id)
+        question = self.session.message((answer or {}).get("reply_to") or "")
+        if answer is None or question is None:
+            return
+        exchange = Exchange(question=question.get("text", ""), answer=answer.get("text", ""),
+                            asked_at=question.get("at", ""), model=answer.get("model", ""),
+                            checks=list(answer.get("checks", [])), zodiac=self.session.zodiac)
+        dialog = self._feedback_dialog = FeedbackDialog(exchange, self.chat)
+        dialog.sent.connect(lambda opened: self.chat.notify(
+            "反馈内容已复制。在打开的网页里按 Ctrl+V 粘贴，再点提交就好。" if opened
+            else "反馈内容已复制，贴到你想发的地方就好。", 15))
+        dialog.open()
 
     def _on_zodiac(self, zodiac: str):
         """The user said their 属相 in the chat: keep it, like the settings field."""
@@ -1001,7 +1309,9 @@ class Pet(QWidget):
             self.play("起床", "招手", "待机")
         else:
             self.play("招手", "待机")
-        if self.isVisible():
+        if self.bubble.asking:
+            self.bubble.set_line(text)                    # over the box being typed in, which stays
+        elif self.isVisible():
             self.bubble.say(text, self.frameGeometry(), REMIND_BUBBLE_S)
         if self.config.mini:
             self._attention_until = time.monotonic() + 60
@@ -1010,13 +1320,25 @@ class Pet(QWidget):
         self.reminded.emit(text)
         return lines
 
-    def _notify_if_hidden(self, text: str):
+    def _notify_if_hidden(self, text: str = "", answer: str = ""):
+        """The chat panel is closed: the answer itself goes in the bubble (a notice for anything else)."""
         if self.config.mini and not self.chat.isVisible():
             self._attention_until = time.monotonic() + 30
             if not self.ambient.isActive():
                 self.ambient.start()
-        if not self.chat.isVisible() and self.isVisible():
+        if not self._bubble_follows() or self.bubble.asking:     # the next question is being typed
+            return
+        if answer:
+            self.bubble.answer(answer, self.frameGeometry())
+        else:
             self.bubble.say(text, self.frameGeometry())
+
+    def _say(self, text: str, seconds: int = 8) -> bool:
+        """A passing word over 小瓜's head, unless the bubble is in the middle of a conversation."""
+        if self.bubble.asking or self.bubble.following_answer:
+            return False
+        self.bubble.say(text, self.frameGeometry(), seconds)
+        return True
 
     # mouse ----------------------------------------------------------------
     def mousePressEvent(self, event):
@@ -1097,7 +1419,7 @@ class Pet(QWidget):
         else:
             self.play("歪头")
             QTimer.singleShot(1500, lambda: self.state == "歪头" and not self.busy and self.play("点头", "待机"))
-        self.bubble.say(random.choice(life.PAT_LINES), self.frameGeometry(), 2)
+        self._say(random.choice(life.PAT_LINES), 2)
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier and not self.config.mini:
@@ -1115,9 +1437,10 @@ class Pet(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        action = QAction(f"打开对话（{self.hotkey_label}）", menu)
-        action.triggered.connect(self.open_chat)
-        menu.addAction(action)
+        for label, handler in ((f"问小瓜（{self.hotkey_label}）", self.ask_in_bubble), ("打开对话", self.open_chat)):
+            action = QAction(label, menu)
+            action.triggered.connect(handler)
+            menu.addAction(action)
         sizes = menu.addMenu("大小（也可 Ctrl+滚轮）")
         for name, size in PET_SIZES.items():
             action = QAction(name, sizes, checkable=True, checked=self.width() == size)
@@ -1212,15 +1535,14 @@ SERVER_NAME = "xiaogua-desktop-pet"      # local socket a second launch uses to 
 
 
 def start_hotkey(combo: str, bridge: Bridge, voice: str | None = None):
-    from pynput import keyboard
+    """叫出小瓜 and 按键说话, registered with Windows (hotkeys.py). The result's `failed` lists the
+    combinations another program already has."""
+    from . import hotkeys
 
     keys = {combo: bridge.hotkey.emit}
     if voice and voice != combo:
         keys[voice] = bridge.voice.emit
-    listener = keyboard.GlobalHotKeys(keys)
-    listener.daemon = True
-    listener.start()
-    return listener
+    return hotkeys.start(keys)
 
 
 def build_agent(config: Config):
@@ -1289,6 +1611,7 @@ class Companion(QObject):
         self.pet.mini_changed.connect(self._mini_changed)
         self.listener = None
         self._hotkey = None
+        self.hotkey_problem = None                 # a hotkey that could not be had, said at start
         self._model_state = self._connection(config)
 
         self.tray = QSystemTrayIcon(self.icon)
@@ -1296,6 +1619,7 @@ class Companion(QObject):
         menu = QMenu()
         self.tray_actions = {}
         for key, label, handler in (
+                ("ask", "问小瓜", self.pet.summon),
                 ("chat", "打开对话", self.pet.open_chat),
                 ("toggle", "隐藏小瓜", self.toggle_pet),
                 ("mini", "缩成小球", lambda: self.set_mini(not self.config.mini)),
@@ -1309,6 +1633,7 @@ class Companion(QObject):
         self.tray_actions["through"].setCheckable(True)
         self.tray_actions["mini"].setText("变回小瓜" if config.mini else "缩成小球")
         self.tray_menu = menu                    # keep a reference: the tray does not own it
+        menu.aboutToShow.connect(self._refresh_toggle)           # 小瓜 may have come back by the hotkey
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._tray_clicked)
         self.apply(config)
@@ -1321,7 +1646,7 @@ class Companion(QObject):
         if hasattr(self.pet.agent, "voice_style"):
             self.pet.agent.voice_style = config.voice_style      # takes effect on the next question
         self.tray_actions["through"].setChecked(config.click_through)
-        self.tray_actions["chat"].setText(f"打开对话（{self.pet.hotkey_label}）")
+        self.tray_actions["ask"].setText(f"问小瓜（{self.pet.hotkey_label}）")
         self.settings.sync_from(config)
         if (config.hotkey, config.voice_hotkey) != self._hotkey:
             self.restart_hotkey()
@@ -1342,12 +1667,22 @@ class Companion(QObject):
         if self.listener is not None:
             self.listener.stop()
             self.listener = None
+        self.hotkey_problem = None
         try:
             self.listener = start_hotkey(self.config.hotkey, self.pet.bridge, self.config.voice_hotkey)
             self._hotkey = (self.config.hotkey, self.config.voice_hotkey)
-        except Exception as error:  # noqa: BLE001 — pynput reports bad combos as various errors
+        except Exception as error:  # noqa: BLE001 — a bad combo, or the system refused the listener
             self._hotkey = None
-            self.settings.hotkey_failed(f"这个组合键用不了：{error}")
+            self.hotkey_problem = f"这个组合键用不了：{error}"
+            self.settings.hotkey_failed(self.hotkey_problem)
+            return
+        taken = [self.hotkey_label(combo) for combo in getattr(self.listener, "failed", [])]
+        if not taken:
+            self.settings.hotkey_ok()
+        else:
+            self.hotkey_problem = (f"**{'、'.join(taken)}** 被别的程序占用了，按了也叫不到小瓜。"
+                                   "右键小瓜 → 设置… → 快捷键与启动，换一个组合吧。")
+            self.settings.hotkey_failed(self.hotkey_problem.replace("**", ""))
 
     def rebuild_agent(self):
         agent, notice = build_agent(self.config)
@@ -1368,9 +1703,11 @@ class Companion(QObject):
 
     # tray -----------------------------------------------------------------
     def _tray_clicked(self, reason):
+        """A click on the tray icon calls 小瓜 out (never hides it: that is in the right-click menu)."""
         from PySide6.QtWidgets import QSystemTrayIcon
         if reason == QSystemTrayIcon.Trigger:
-            self.toggle_pet()
+            self.pet.summon()
+            self._refresh_toggle()
         elif reason == QSystemTrayIcon.DoubleClick:
             self.show_settings()
 
@@ -1381,6 +1718,9 @@ class Companion(QObject):
             self.pet.chat.hide()
         else:
             self.pet.show()
+        self._refresh_toggle()
+
+    def _refresh_toggle(self):
         self.tray_actions["toggle"].setText("隐藏小瓜" if self.pet.isVisible() else "显示小瓜")
 
     def toggle_click_through(self):
@@ -1419,6 +1759,9 @@ class Companion(QObject):
         self.tray.show()
         if self.notice:
             self.pet.chat.add_notice(self.notice)
+        if self.hotkey_problem:
+            self.pet.bubble.say(self.hotkey_problem, self.pet.frameGeometry(), 20)
+        elif self.notice:
             self.pet.bubble.say("还没连上模型，点我看看怎么设置。", self.pet.frameGeometry(), 12)
         elif self.config.greet_on_start and not quiet and not self.pet.greet_today():
             self.pet.bubble.say(f"小瓜在～点我聊天，或者按 **{self.pet.hotkey_label}** 随时叫我。",
@@ -1455,7 +1798,7 @@ def selftest(out_path: str) -> int:
 
     report: dict = {}
     try:
-        from . import chat, openai_compat, providers, settings_window  # noqa: F401 — import check
+        from . import chat, feedback, hotkeys, openai_compat, providers, settings_window  # noqa: F401 — import check
         from .tools import cast_now, lookup_hexagrams, run_tool
 
         cast = cast_now("自检：今天面试能成吗")

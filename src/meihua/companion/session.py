@@ -317,13 +317,15 @@ class Session:
 
     # -- what the chat shows ------------------------------------------------
     def log_message(self, role: str, text: str, now: datetime | None = None,
-                    reply_to: str | None = None) -> str:
-        """Keep one chat line; returns its id (an answer points at its question by `reply_to`)."""
+                    reply_to: str | None = None, **about) -> str:
+        """Keep one chat line; returns its id (an answer points at its question by `reply_to`).
+        `about`: more to keep with it, like the model that gave an answer (for 反馈这条回答)."""
         now = now or _now()
         message_id = uuid.uuid4().hex[:10]
         entry = {"id": message_id, "role": role, "text": text, "at": now.isoformat()}
         if reply_to:
             entry["reply_to"] = reply_to
+        entry.update({key: value for key, value in about.items() if value})
         if role == "mine":
             self.chat.entitle(text)
         self.chat.messages.append(entry)

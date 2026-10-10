@@ -10,7 +10,7 @@ The components below are not covered by this project's license; each keeps its o
 |---|---|---|
 | [Python](https://www.python.org/) | 运行环境 | PSF License |
 | [Qt for Python (PySide6 / shiboken6)](https://doc.qt.io/qtforpython/) | 窗口和界面 | LGPL-3.0（另有 GPL 选项） |
-| [pynput](https://github.com/moses-palmer/pynput) | 全局快捷键 | LGPL-3.0 |
+| [pynput](https://github.com/moses-palmer/pynput) | 按键说话时替你按 Win + H | LGPL-3.0 |
 | [Pillow](https://python-pillow.org/) | 处理小瓜的图片 | MIT-CMU (HPND) |
 | [lunar_python](https://github.com/6tail/lunar-python) | 农历、干支、黄历宜忌 | MIT |
 | [anthropic](https://github.com/anthropics/anthropic-sdk-python) | 连接 Claude | MIT |
