@@ -28,7 +28,11 @@ def pet(tmp_path, monkeypatch):
     pet.move(900, 500)
     pet.show()
     pet.open_chat()
-    return pet
+    yield pet
+    pet.chat._size_timer.stop()                 # a later test must not get this one's size saved
+    pet.chat.resized.disconnect()
+    pet.chat.hide()
+    pet.hide()
 
 
 def panel_rect(panel) -> QRect:
@@ -96,7 +100,10 @@ def test_the_size_is_remembered_and_used_next_time(pet):
     mouse(panel.feed, QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton)
     mouse(panel.feed, QEvent.MouseMove, start - QPoint(0, 80), Qt.LeftButton)
     mouse(panel.feed, QEvent.MouseButtonRelease, start, Qt.NoButton, Qt.LeftButton)
-    QTest.qWait(500)
+    for _ in range(60):                                      # saved once the drag stops (400 ms)
+        QTest.qWait(50)
+        if Config.load().chat_size is not None:
+            break
     size = [panel.width(), panel.height()]
     assert Config.load().chat_size == size and size[1] == chat.CHAT_SIZE[1] - 80
     panel.hide()
@@ -120,3 +127,19 @@ def test_clicks_inside_still_reach_the_chat(pet):
     mouse(panel.feed, QEvent.MouseButtonPress, rect.center(), Qt.LeftButton, Qt.LeftButton)
     assert panel._resizing is None
     mouse(panel.feed, QEvent.MouseButtonRelease, rect.center(), Qt.NoButton, Qt.LeftButton)
+
+
+def test_the_bubbles_wrap_to_the_windows_width(pet):
+    """Narrowed, a long answer used to stay 268 wide and run off the right side."""
+    panel = pet.chat
+    long = panel.add_notice("还没设置 豆包（火山方舟） 的 API key，小瓜先用离线模式陪你：能看今天的黄历、给你起个盘面，但细讲要接上模型。")
+    short = panel.add_notice("好的。")
+    panel.resize(*chat.CHAT_MIN)
+    QApplication.processEvents()
+    inside = QRect(panel.panel.mapToGlobal(QPoint(0, 0)), panel.panel.size())
+    bubble = QRect(long.mapToGlobal(QPoint(0, 0)), long.size())
+    assert inside.contains(bubble) and long.body.width() == chat.CHAT_MIN[0] - chat.BUBBLE_SIDES
+    panel.resize(600, 600)
+    assert long.body.width() == 600 - chat.BUBBLE_SIDES and short.body.width() < 100     # short ones stay short
+    later = panel.add_notice("新消息" * 40)
+    assert later.body.width() == 600 - chat.BUBBLE_SIDES

@@ -25,7 +25,8 @@ CHAT_SIZE = (400, 580)        # the chat window (shadow margin included) until t
 CHAT_MIN = (340, 420)
 EDGE_OUT, EDGE_IN, EDGE_CORNER = 6, 4, 16   # px around the panel's edge that resize it; corners reach further
 QUICK_QUESTIONS = ("我今天适合干嘛", "帮我挑个好日子", "今天几点出门好")
-BUBBLE_MAX = 268              # widest text in a bubble (the panel is 400 wide)
+BUBBLE_MAX = 268              # widest text in a bubble while the window is its first 400 wide
+BUBBLE_SIDES = 132            # window width that is not bubble text: shadow, margins, avatar, padding
 # The answer ends with a mood tag (agent.split_mood); while streaming, hide it even half-arrived.
 _TRAILING_TAG = re.compile(r"\s*[〔【\[][^〕】\]\n]{0,8}[〕】\]]?\s*$")
 UI = meihua.ROOT / "assets" / "ui"
@@ -163,6 +164,7 @@ class Message(QFrame):
     """One chat bubble. kind: xiaogua / mine / error / typing."""
 
     _metrics: QFontMetrics | None = None
+    max_width = BUBBLE_MAX                       # follows the window's width (ChatPanel.resizeEvent)
 
     def set_text(self, text: str):
         """Set the text and size the bubble to it: short lines stay short, long ones wrap at BUBBLE_MAX."""
@@ -172,8 +174,12 @@ class Message(QFrame):
             font.setPixelSize(13)                            # QLabel#body in the style sheet
             Message._metrics = QFontMetrics(font)
         plain = re.sub(r"[*_`#>]", "", text) if self.body.textFormat() == Qt.MarkdownText else text
-        natural = max((Message._metrics.horizontalAdvance(line) for line in plain.splitlines()), default=0)
-        self.body.setFixedWidth(max(24, min(natural + 8, BUBBLE_MAX)))
+        self._natural = max((Message._metrics.horizontalAdvance(line) for line in plain.splitlines()), default=0)
+        self.fit()
+
+    def fit(self):
+        """Wrap at the current widest bubble (the window may have been resized)."""
+        self.body.setFixedWidth(max(24, min(getattr(self, "_natural", 0) + 8, Message.max_width)))
 
     def __init__(self, kind: str, text: str = "", image: QPixmap | None = None,
                  msg_id: str | None = None, reply_to: str | None = None):
@@ -866,6 +872,11 @@ class ChatPanel(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        widest = max(160, self.width() - BUBBLE_SIDES)
+        if widest != Message.max_width:          # the bubbles wrap to the new width
+            Message.max_width = widest
+            for message in self.findChildren(Message):
+                message.fit()
         if self.isVisible() and not self._placing:
             self._size_timer.start()                 # remember it once the dragging stops
 
