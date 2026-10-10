@@ -625,6 +625,8 @@ class Pet(QWidget):
         self.chat.delete_requested.connect(self._delete)
         self.chat.retry_requested.connect(self._retry)
         self.chat.feedback_requested.connect(self._feedback)
+        self.chat.preferred_size = tuple(self.config.chat_size) if self.config.chat_size else None
+        self.chat.resized.connect(self._chat_resized)
         self.chat.chats_requested.connect(
             lambda: self.chat.show_chat_list(self.session.list_chats(), self.session.chat.id))
         self.chat.chat_picked.connect(self._switch_chat)
@@ -1257,6 +1259,12 @@ class Pet(QWidget):
         self._bubble_draft = ""
         self._notify_if_hidden(answer=text + (f"\n\n*{note}*" if note else ""))
         self.idle_timer.start(self.idle_ms)
+
+    def _chat_resized(self, width: int, height: int):
+        """The user dragged the chat's edges: it opens at that size from now on."""
+        self.chat.preferred_size = (width, height)
+        self.config.chat_size = [width, height]
+        self.config.save()
 
     def _model_label(self) -> str:
         """Which model answered, for 反馈这条回答: the vendor's name and the model, never its address or key."""

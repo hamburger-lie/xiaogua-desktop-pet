@@ -59,7 +59,7 @@ class Config:
     always_on_top: bool = True
     sleep_minutes: int = 10
     bubble_seconds: int = 20            # how long an answer stays before 小瓜 goes back to idle
-    hotkey: str = "<ctrl>+<alt>+x"     # 叫出小瓜: opens (or hides) the chat from anywhere
+    hotkey: str = "<ctrl>+<alt>+x"     # 叫出小瓜: the input box over 小瓜's head, from anywhere
     greet_on_start: bool = True
     keep_history: bool = True          # store the conversations (text only)
     voice_style: str = "平衡"          # 直白 / 平衡 / 玄一点
@@ -71,6 +71,7 @@ class Config:
     voice_hotkey: str = "<ctrl>+<alt>+v"    # 按键说话: once to start Windows voice typing, again to send
     deep_thinking: bool = False         # let models that think first (豆包 Seed…) do so: slower, ~10 s a call
     position: list[int] | None = None   # last top-left, restored on start
+    chat_size: list[int] | None = None  # the chat panel's size, once the user has dragged its edges
     extra: dict = field(default_factory=dict, repr=False)
 
     @classmethod

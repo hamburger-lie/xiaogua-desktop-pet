@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter,
                            QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
@@ -21,6 +21,9 @@ import meihua
 from . import harness
 
 APP_TITLE = "每日一瓜"
+CHAT_SIZE = (400, 580)        # the chat window (shadow margin included) until the user resizes it
+CHAT_MIN = (340, 420)
+EDGE_OUT, EDGE_IN, EDGE_CORNER = 6, 4, 16   # px around the panel's edge that resize it; corners reach further
 QUICK_QUESTIONS = ("我今天适合干嘛", "帮我挑个好日子", "今天几点出门好")
 BUBBLE_MAX = 268              # widest text in a bubble (the panel is 400 wide)
 # The answer ends with a mood tag (agent.split_mood); while streaming, hide it even half-arrived.
@@ -110,6 +113,25 @@ def rounded(pixmap: QPixmap, radius: float) -> QPixmap:
 def screen_rect_for(point: QPoint):
     screen = QGuiApplication.screenAt(point) or QGuiApplication.primaryScreen()
     return screen.availableGeometry()
+
+
+_MOUSE_EVENTS = (QEvent.MouseMove, QEvent.MouseButtonPress, QEvent.MouseButtonRelease)
+_NO_EDGE = Qt.Edge(0)
+
+
+def edge_cursor(edges) -> Qt.CursorShape | None:
+    """The resize arrow for a set of edges (None: not on an edge)."""
+    left, right = bool(edges & Qt.LeftEdge), bool(edges & Qt.RightEdge)
+    top, bottom = bool(edges & Qt.TopEdge), bool(edges & Qt.BottomEdge)
+    if (left and top) or (right and bottom):
+        return Qt.SizeFDiagCursor
+    if (right and top) or (left and bottom):
+        return Qt.SizeBDiagCursor
+    if left or right:
+        return Qt.SizeHorCursor
+    if top or bottom:
+        return Qt.SizeVerCursor
+    return None
 
 
 def shown_answer(text: str) -> str:
@@ -309,6 +331,7 @@ class ChatPanel(QWidget):
     chat_picked = Signal(str)                  # conversation id
     chat_deleted = Signal(str)                 # conversation id: 删除整个对话
     new_chat_requested = Signal()
+    resized = Signal(int, int)                 # the user dragged an edge: the size to open at next time
 
     def __init__(self, avatar: QPixmap | None = None, hotkey_label: str = "Ctrl+Alt+X"):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -357,7 +380,16 @@ class ChatPanel(QWidget):
         self.feed_layout.addWidget(self.welcome)
 
         body.addWidget(self._composer())
-        self.resize(400, 580)
+        self.resize(*CHAT_SIZE)
+
+        # Resizing by the edges: a frameless window has none of its own (see _edge_event).
+        self.preferred_size: tuple[int, int] | None = None     # set by the pet from the settings
+        self.setMinimumSize(*CHAT_MIN)
+        self._resizing = None                  # (edges, pointer, geometry) while resized by hand
+        self._placing = False                  # open_beside sizing it: not the user
+        self._size_timer = QTimer(self, singleShot=True, interval=400)
+        self._size_timer.timeout.connect(lambda: self.resized.emit(self.width(), self.height()))
+        QApplication.instance().installEventFilter(self)
 
     # building -------------------------------------------------------------
     def _icon_button(self, name: str, tip: str, handler) -> QPushButton:
@@ -480,6 +512,9 @@ class ChatPanel(QWidget):
 
     # input ----------------------------------------------------------------
     def eventFilter(self, watched, event):
+        if event.type() in _MOUSE_EVENTS and isinstance(watched, QWidget) and watched.window() is self:
+            if self._edge_event(event):
+                return True
         if watched is self.edit:
             if event.type() == event.Type.KeyPress:
                 if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
@@ -767,11 +802,82 @@ class ChatPanel(QWidget):
         self._update_welcome_hint()
 
     # window ---------------------------------------------------------------
+    # resizing by the edges -----------------------------------------------------
+    def _edges_at(self, point: QPoint):
+        """The panel edges a screen point is on: a band from EDGE_OUT outside the panel (its
+        shadow) to EDGE_IN inside it; near a corner the band reaches EDGE_CORNER along both sides."""
+        if not self.isVisible():
+            return _NO_EDGE
+        rect = QRect(self.panel.mapToGlobal(QPoint(0, 0)), self.panel.size())
+        if not rect.adjusted(-EDGE_OUT, -EDGE_OUT, EDGE_OUT, EDGE_OUT).contains(point):
+            return _NO_EDGE
+        inside = {Qt.LeftEdge: point.x() - rect.left(), Qt.RightEdge: rect.right() - point.x(),
+                  Qt.TopEdge: point.y() - rect.top(), Qt.BottomEdge: rect.bottom() - point.y()}
+        edges = _NO_EDGE
+        for edge, distance in inside.items():
+            if distance <= EDGE_IN:
+                edges |= edge
+        if edges:                                        # on an edge: near its ends is a corner
+            for edge, distance in inside.items():
+                if distance <= EDGE_CORNER:
+                    edges |= edge
+        return edges
+
+    def _edge_event(self, event) -> bool:
+        """Mouse events anywhere in the window: the resize arrow on the edges, and the resize
+        itself. True when the event was the resize's (the widget under the mouse must not get it)."""
+        point = event.globalPosition().toPoint()
+        if self._resizing is not None:
+            if event.type() == QEvent.MouseMove:
+                self._resize_to(point)
+            elif event.type() == QEvent.MouseButtonRelease:
+                self._resizing = None
+            return True
+        edges = self._edges_at(point)
+        if event.type() == QEvent.MouseMove and not event.buttons():
+            shape = edge_cursor(edges)
+            if shape is None:
+                self.unsetCursor()
+            else:
+                self.setCursor(shape)
+            return False
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton and edges:
+            handle = self.windowHandle()
+            if handle is None or not handle.startSystemResize(edges):     # Windows does it smoothly
+                self._resizing = (edges, point, QRect(self.geometry()))
+            return True
+        return False
+
+    def _resize_to(self, point: QPoint):
+        """By hand, where the system cannot: move the dragged edges, keep the others put."""
+        edges, start, geometry = self._resizing
+        dx, dy = point.x() - start.x(), point.y() - start.y()
+        rect = QRect(geometry)
+        min_w, min_h = self.minimumWidth(), self.minimumHeight()
+        if edges & Qt.LeftEdge:
+            rect.setLeft(min(rect.left() + dx, rect.right() - min_w + 1))
+        if edges & Qt.RightEdge:
+            rect.setRight(max(rect.right() + dx, rect.left() + min_w - 1))
+        if edges & Qt.TopEdge:
+            rect.setTop(min(rect.top() + dy, rect.bottom() - min_h + 1))
+        if edges & Qt.BottomEdge:
+            rect.setBottom(max(rect.bottom() + dy, rect.top() + min_h - 1))
+        self.setGeometry(rect)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.isVisible() and not self._placing:
+            self._size_timer.start()                 # remember it once the dragging stops
+
     def open_beside(self, pet_geometry):
-        """Show next to 小瓜 on 小瓜's own screen: left of it if there is room, else right."""
+        """Show next to 小瓜 on 小瓜's own screen: left of it if there is room, else right.
+        At the size the user last dragged it to (within the screen)."""
         area = screen_rect_for(pet_geometry.center())
-        height = min(580, area.height() - 20)
-        self.resize(400, height)
+        width, height = self.preferred_size or CHAT_SIZE
+        self._placing = True
+        self.resize(max(CHAT_MIN[0], min(width, area.width() - 20)),
+                    max(CHAT_MIN[1], min(height, area.height() - 20)))
+        self._placing = False
         x = pet_geometry.left() - self.width() + 10
         if x < area.left():
             x = pet_geometry.right() - 10
