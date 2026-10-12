@@ -145,9 +145,9 @@ class EdgeGrip(QWidget):
         super().__init__(chat)
         self.chat, self.edges = chat, edges
         self.setCursor(edge_cursor(edges))
-        # Alpha 1 of 255: unseen, but a layered window lets clicks through pixels that are fully clear.
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet("background: rgba(0, 0, 0, 1);")
+        # Nothing painted: under the strip are the panel (opaque) and its shadow, which catch the mouse.
+        # A fill replaces those pixels in a translucent window: opaque black showed as a thick black
+        # frame, and an almost clear colour let the clicks fall through to the desktop.
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

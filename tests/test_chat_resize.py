@@ -179,3 +179,10 @@ def test_a_frozen_window_is_logged_with_where_it_was_stuck(caplog):
     watch.halt.set()
     stuck = [r.getMessage() for r in caplog.records if "界面卡住" in r.getMessage()]
     assert stuck and "test_a_frozen_window_is_logged" in stuck[0]
+
+
+def test_the_grips_paint_nothing(pet):
+    """A fill under the strips showed as a black frame (opaque) or let clicks through (almost clear)."""
+    for handle in pet.chat.grips:
+        assert handle.styleSheet() == "" and not handle.autoFillBackground()
+        assert not handle.testAttribute(Qt.WA_StyledBackground)

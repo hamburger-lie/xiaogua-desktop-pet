@@ -1614,6 +1614,72 @@ GIL_SWITCH_S = 0.001         # the worker thread hands the GIL back this often (
 STALL_S = 4.0                # the GUI thread silent this long: where it is stuck goes in the log
 
 
+class TitlebarGuard:
+    """Keep Qt's stray title bars off the screen.
+
+    Qt 6.11 gives each window with a translucent background a helper window, class
+    「_q_titlebar」, for a title bar. 小瓜's windows are all frameless, yet now and then Qt shows
+    that helper at the top-left corner of the screen: the small empty frame with 口 and X the
+    user saw after pressing Enter. Windows tells us whenever one of our windows is shown
+    (EVENT_OBJECT_SHOW, this process only, so it is rare), and such a helper is hidden at once.
+    """
+
+    EVENT_OBJECT_SHOW, OBJID_WINDOW, SW_HIDE = 0x8002, 0, 0
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        self.hidden = 0
+        user32 = ctypes.windll.user32
+        user32.SetWinEventHook.restype = wintypes.HANDLE
+        user32.GetClassNameW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+        user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+        callback_type = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND, wintypes.LONG,
+                                           wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+
+        def shown(_hook, _event, hwnd, id_object, _child, _thread, _time):
+            if id_object != self.OBJID_WINDOW or not hwnd:
+                return
+            name = ctypes.create_unicode_buffer(32)
+            user32.GetClassNameW(hwnd, name, 32)
+            if name.value == "_q_titlebar":
+                user32.ShowWindow(hwnd, self.SW_HIDE)
+                self.hidden += 1
+
+        self._callback = callback_type(shown)               # kept: Windows calls it for as long as we run
+        self._hook = user32.SetWinEventHook(self.EVENT_OBJECT_SHOW, self.EVENT_OBJECT_SHOW, None,
+                                            self._callback, os.getpid(), 0, 0)   # out of context, ours only
+        for hwnd in self.titlebars():                      # one already up when we start
+            user32.ShowWindow(hwnd, self.SW_HIDE)
+
+    @staticmethod
+    def titlebars(visible_only: bool = True) -> list:
+        """Our 「_q_titlebar」 windows (the visible ones by default)."""
+        import ctypes
+        from ctypes import wintypes
+
+        user32, found, me = ctypes.windll.user32, [], os.getpid()
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def each(hwnd, _):
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            name = ctypes.create_unicode_buffer(32)
+            user32.GetClassNameW(hwnd, name, 32)
+            if pid.value == me and name.value == "_q_titlebar" and (user32.IsWindowVisible(hwnd) or not visible_only):
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(each, 0)
+        return found
+
+    def stop(self):
+        import ctypes
+        if self._hook:
+            ctypes.windll.user32.UnhookWinEvent(self._hook)
+            self._hook = None
+
+
 def watch_for_stalls(stall_s: float = STALL_S, every_s: float = 1.0) -> QTimer:
     """If the GUI thread stops answering for `stall_s`, log where it is stuck (code lines only,
     nothing the user wrote). Windows shows its blank 「未响应」 frames then; the log says why.
@@ -1937,6 +2003,7 @@ def main(argv: list[str] | None = None) -> int:
     companion = holder["companion"] = Companion(config)
     companion.start(quiet=args.autostart)
     heartbeat = watch_for_stalls()  # noqa: F841 — kept alive until the app ends
+    guard = TitlebarGuard() if sys.platform == "win32" else None  # noqa: F841 — the hook lives as long as this
     return app.exec()
 
 
