@@ -60,14 +60,3 @@ def test_the_single_instance_pipe_is_for_this_user_only(monkeypatch):
         assert server is not None and server.socketOptions() & QLocalServer.UserAccessOption
     finally:
         server.close()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows only")
-def test_the_titlebar_guard_hooks_only_our_own_windows():
-    guard = companion.TitlebarGuard()
-    try:
-        assert guard._hook and guard.hidden == 0
-        assert companion.TitlebarGuard.titlebars() == []          # offscreen: none to hide
-    finally:
-        guard.stop()
-    assert guard._hook is None

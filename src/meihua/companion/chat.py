@@ -237,7 +237,10 @@ class Message(QFrame):
             thumb = QLabel()
             thumb.setPixmap(rounded(image.scaled(220, 124, Qt.KeepAspectRatio, Qt.SmoothTransformation), 8))
             layout.addWidget(thumb)
-        self.body = QLabel(objectName="body")
+        # Made with its parent, and shown only once it is in the layout: a parentless widget that is
+        # shown becomes a window of its own. setVisible before addWidget flashed a small framed
+        # window at the screen's top-left for every new message (the 「口 X」 box after Enter).
+        self.body = QLabel(self, objectName="body")
         self.body.setWordWrap(True)
         self.body.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
         self.body.linkActivated.connect(open_web_link)      # never setOpenExternalLinks: see open_web_link
@@ -245,8 +248,8 @@ class Message(QFrame):
         self.body.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.body.setContextMenuPolicy(Qt.NoContextMenu)          # right-click goes to the bubble's menu
         self.set_text(text)
-        self.body.setVisible(bool(text) or kind == "typing")
         layout.addWidget(self.body)
+        self.body.setVisible(bool(text) or kind == "typing")
         self.set_ids(msg_id, reply_to)
         if kind == "typing":
             self._dots = 0
