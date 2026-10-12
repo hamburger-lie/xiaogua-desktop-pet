@@ -195,17 +195,28 @@ def test_chat_opens_beside_the_pet_on_the_pets_screen():
     assert panel.geometry().right() <= pet.left() + 20                     # to the left of 小瓜
 
 
-def test_clicking_the_pet_toggles_the_chat():
+def test_a_click_on_the_pet_opens_the_box_over_its_head_and_the_menu_opens_the_chat():
+    """Left click: the small box (like the hotkey); the big chat is 右键 → 打开对话."""
     from PySide6.QtCore import QPointF, Qt
     from PySide6.QtGui import QMouseEvent
     pet = companion.Pet(companion.OfflineAgent(), "Ctrl+Alt+X")
     pet.show()
     point = QPointF(pet.width() / 2, pet.height() / 2)
     global_point = QPointF(pet.mapToGlobal(point.toPoint()))
-    for kind in (QMouseEvent.Type.MouseButtonPress, QMouseEvent.Type.MouseButtonRelease):
-        QApplication.sendEvent(pet, QMouseEvent(kind, point, global_point, Qt.LeftButton,
-                                                Qt.LeftButton, Qt.NoModifier))
+
+    def click():
+        for kind in (QMouseEvent.Type.MouseButtonPress, QMouseEvent.Type.MouseButtonRelease):
+            QApplication.sendEvent(pet, QMouseEvent(kind, point, global_point, Qt.LeftButton,
+                                                    Qt.LeftButton, Qt.NoModifier))
+    click()
+    assert pet.bubble.asking and not pet.chat.isVisible()
+    assert "右键小瓜" in pet.bubble.footer.text() and "单击小瓜" not in pet.bubble.footer.text()
+    click()
+    assert not pet.bubble.isVisible()                                  # clicked again: put away
+    pet.open_chat()                                                    # what 右键 → 打开对话 does
     assert pet.chat.isVisible()
+    click()
+    assert not pet.chat.isVisible()                                    # a click closes the big chat too
 
 
 def test_submitting_starts_the_reading(monkeypatch):

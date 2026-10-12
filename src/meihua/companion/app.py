@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """每日一瓜 desktop app: 小瓜 floating on the desktop, with a chat panel.
 
-A frameless, always-on-top, transparent window showing 小瓜. Click 小瓜 to open the
-chat (chat.py), which keeps the whole conversation. The hotkey (default Ctrl+Alt+X)
-or the tray icon opens a small input box in the bubble over 小瓜's head instead;
-while the chat is closed, 小瓜's work and answer show in that bubble.
+A frameless, always-on-top, transparent window showing 小瓜. A click on 小瓜, the
+hotkey (default Ctrl+Alt+X) or the tray icon opens a small input box in the bubble
+over its head; while the chat panel is closed, 小瓜's work and answer show in that
+bubble. The chat panel (chat.py), with the whole conversation, opens from the
+right-click menu (打开对话) or a click on the bubble.
 
 Motions follow voice/xiaogua-motion-design.md. New artwork dropped into
 assets/xiaogua/<动作名>/ as PNG frames is picked up on restart; until then each
@@ -339,7 +340,7 @@ def bubble_text(text: str, limit: int = BUBBLE_CHARS) -> str:
     head = text[:limit]
     cut = max(head.rfind(mark) for mark in "。！？；\n")
     head = head[:cut + 1] if cut > limit // 2 else head
-    return head.rstrip() + "……\n\n*（点我看完整回答）*"
+    return head.rstrip() + "……\n\n*（点这个气泡看完整回答）*"
 
 
 def answer_seconds(text: str) -> int:
@@ -471,7 +472,7 @@ class Bubble(QWidget):
 
         self.input.clear()
         self.listening(False)
-        self._show("ask", text, pet_geometry, ASK_IDLE_S, "Enter 发送 · Esc 收起 · 单击小瓜看完整对话",
+        self._show("ask", text, pet_geometry, ASK_IDLE_S, "Enter 发送 · Esc 收起 · 右键小瓜可打开完整对话",
                    width=BUBBLE_WIDTH)
         bring_to_front(self)
         self.input.setFocus()
@@ -522,7 +523,7 @@ class Bubble(QWidget):
             self._show("answer", bubble_text(shown), self._pet_geometry, None, width=BUBBLE_WIDTH)
 
     def answer(self, text: str, pet_geometry):
-        self._show("answer", bubble_text(text), pet_geometry, answer_seconds(text), "点我看完整对话",
+        self._show("answer", bubble_text(text), pet_geometry, answer_seconds(text), "点气泡看完整对话",
                    width=BUBBLE_WIDTH)
 
     def send(self):
@@ -719,7 +720,7 @@ class Pet(QWidget):
         self.sleep_ms = max(1, config.sleep_minutes) * 60_000
         self.idle_ms = max(3, config.bubble_seconds) * 1000
         self.chat.set_hotkey_label(self.hotkey_label)
-        self.setToolTip(f"小瓜 · 单击聊天，{self.hotkey_label} 随时叫我，右键更多")
+        self.setToolTip(f"小瓜 · 单击或按 {self.hotkey_label} 问我，右键「打开对话」看完整对话")
 
     # animation ------------------------------------------------------------
     def play(self, state: str, *then: str):
@@ -1032,8 +1033,8 @@ class Pet(QWidget):
 
     # talking in the bubble (no chat panel) ---------------------------------------
     def hotkey_pressed(self):
-        """叫出小瓜 (Ctrl+Alt+X): a box to type in, right over 小瓜's head. Pressed again it goes
-        away; with the chat panel open, the panel closes instead."""
+        """叫出小瓜 (Ctrl+Alt+X, or a click on 小瓜): a box to type in, right over 小瓜's head.
+        Pressed again it goes away; with the chat panel open, the panel closes instead."""
         if self.chat.isVisible():
             self.chat.hide()
         elif self.bubble.asking:
@@ -1056,9 +1057,13 @@ class Pet(QWidget):
 
     def ask_in_bubble(self):
         first = self.greet_today(bubble=False)            # the first look today: today's line above the box
+        # A click shows the morning line on the press (_wake) and opens the box on the release:
+        # the box keeps that line above it instead of wiping it away.
+        showing = (self.bubble.isVisible() and self.bubble.mode == "note"
+                   and self.bubble.label.text() == self.chat.today_text)
         if not self.busy and not self._dragging and self.state in ("待机", "睡着"):
             self.play("招手", "待机")
-        self.bubble.ask(self.frameGeometry(), self.chat.today_text if first else "")
+        self.bubble.ask(self.frameGeometry(), self.chat.today_text if first or showing else "")
 
     def _ask_from_bubble(self, text: str):
         if self.busy:
@@ -1265,7 +1270,7 @@ class Pet(QWidget):
             message = explain_error(reply)
             error_id = self.session.log_message("error", message, reply_to=self._question_id)
             self.chat.add_error(message, error_id, self._question_id)
-            self._notify_if_hidden("小瓜这次没问成，点我看看原因。")
+            self._notify_if_hidden("小瓜这次没问成，点这个气泡看原因。")
             return
         text = reply.text
         note = None
@@ -1425,7 +1430,7 @@ class Pet(QWidget):
         if self._dragging:
             self._end_drag()
         if clicked and event.button() == Qt.LeftButton:
-            self.toggle_chat()
+            self.hotkey_pressed()                 # like the hotkey: the box over its head (again: away)
 
     def _end_drag(self):
         self._dragging = False
@@ -1478,7 +1483,8 @@ class Pet(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        for label, handler in ((f"问小瓜（{self.hotkey_label}）", self.ask_in_bubble), ("打开对话", self.open_chat)):
+        for label, handler in (("打开对话（完整记录）", self.open_chat),
+                               (f"问小瓜（单击 / {self.hotkey_label}）", self.ask_in_bubble)):
             action = QAction(label, menu)
             action.triggered.connect(handler)
             menu.addAction(action)
@@ -1809,7 +1815,7 @@ class Companion(QObject):
         if self.hotkey_problem:
             self.pet.bubble.say(self.hotkey_problem, self.pet.frameGeometry(), 20)
         elif self.notice:
-            self.pet.bubble.say("还没连上模型，点我看看怎么设置。", self.pet.frameGeometry(), 12)
+            self.pet.bubble.say("还没连上模型，点这个气泡看看怎么设置。", self.pet.frameGeometry(), 12)
         elif self.config.greet_on_start and not quiet and not self.pet.greet_today():
             self.pet.bubble.say(f"小瓜在～点我聊天，或者按 **{self.pet.hotkey_label}** 随时叫我。",
                                 self.pet.frameGeometry())

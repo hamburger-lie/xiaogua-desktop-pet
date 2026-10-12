@@ -699,7 +699,7 @@ class SettingsWindow(QWidget):
         self.hotkey_button.recorded.connect(lambda combo: self._set("hotkey", combo))
         form.addRow("叫出小瓜", self.hotkey_button)
         form.addRow("", self._hint("按一下，小瓜头顶冒出输入框，打字回车就问，回答也冒在气泡里；"
-                                   "再按一下收起。想看完整对话就单击小瓜。"))
+                                   "再按一下收起；单击小瓜也一样。完整对话：右键小瓜 →「打开对话」。"))
         self.voice_button = HotkeyButton(self.config.voice_hotkey)
         self.voice_button.recorded.connect(lambda combo: self._set("voice_hotkey", combo))
         form.addRow("按键说话", self.voice_button)

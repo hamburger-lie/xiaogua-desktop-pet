@@ -124,7 +124,7 @@ def test_an_error_says_where_to_look(pet):
 def test_long_answers_are_cut_in_the_bubble_but_whole_in_the_chat():
     long = "今天宜理发。" * 80
     shown = companion.bubble_text(long)
-    assert len(shown) < len(long) and "点我看完整回答" in shown and shown.split("……")[0].endswith("。")
+    assert len(shown) < len(long) and "点这个气泡看完整回答" in shown and shown.split("……")[0].endswith("。")
     assert companion.bubble_text("短的。") == "短的。"
     assert companion.answer_seconds("短") == 12 and companion.answer_seconds(long) == 60
 
@@ -199,3 +199,16 @@ def test_pinyin_being_typed_hides_the_grey_hint_in_the_chat(pet):
     edit.clear()
     pet.chat.set_listening(True)
     assert "在听" in edit.placeholderText()
+
+
+def test_the_first_click_of_the_day_keeps_todays_line_above_the_box(pet):
+    """The press says the morning line (_wake), the release opens the box: the line stays."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+    pet.config.last_greet, pet.config.greet_on_start = "", True
+    point = QPointF(pet.width() / 2, pet.height() / 2)
+    global_point = QPointF(pet.mapToGlobal(point.toPoint()))
+    for kind in (QMouseEvent.Type.MouseButtonPress, QMouseEvent.Type.MouseButtonRelease):
+        QApplication.sendEvent(pet, QMouseEvent(kind, point, global_point, Qt.LeftButton,
+                                                Qt.LeftButton, Qt.NoModifier))
+    assert pet.bubble.asking and "宜" in pet.bubble.label.text()
