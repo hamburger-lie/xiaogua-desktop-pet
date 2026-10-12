@@ -106,6 +106,13 @@ def to_pynput(modifiers, key: int) -> str | None:
     return "+".join(parts + [name])
 
 
+def plain_http_elsewhere(url: str) -> bool:
+    """An http:// address on another machine: a key sent there travels unencrypted."""
+    link = QUrl(url.strip())
+    local = link.host().lower() in ("localhost", "127.0.0.1", "::1") or link.host().lower().endswith(".localhost")
+    return link.scheme().lower() == "http" and not local
+
+
 def hotkey_label(combo: str) -> str:
     """'<ctrl>+<alt>+g' -> 'Ctrl+Alt+G'."""
     names = {"cmd": "Win", "page_up": "PgUp", "page_down": "PgDn", "print_screen": "PrtSc"}
@@ -376,6 +383,9 @@ class SettingsWindow(QWidget):
         else:
             urls.pop(preset.id, None)
         self._set("base_urls", urls)
+        if value and plain_http_elsewhere(value) and preset.needs_key:
+            self._show_check(False, "注意：这个地址是 http，不加密，API key 会明文发出去。"
+                                    "除非是你自己电脑上的模型服务，请用 https 开头的地址。", [])
 
     def _reset_base_url(self):
         self.base_url_edit.setText(self.config.preset.base_url)

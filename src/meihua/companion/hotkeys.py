@@ -59,22 +59,37 @@ def modifiers_held() -> bool:
 class WindowsHotkeys:
     """Hotkeys registered with Windows, delivered to a hidden window of our own.
 
+    Only that window's messages reach Python (its nativeEvent). An application-wide native
+    event filter ran Python for every Windows message; while the worker thread computed, each
+    of those waited for the GIL and the window could freeze long enough to be 「未响应」.
+
     `failed` lists the combinations Windows refused (another program has them).
     """
 
     def __init__(self, keys: dict[str, Callable[[], None]]):
         from ctypes import wintypes
 
-        from PySide6.QtCore import QAbstractNativeEventFilter, QCoreApplication, QTimer
+        from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QWidget
 
         user32 = ctypes.windll.user32
         user32.RegisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT)
         user32.UnregisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int)
         self._user32 = user32
-        self._window = QWidget()                      # never shown; its handle receives WM_HOTKEY
-        self._hwnd = int(self._window.winId())
         self._actions: dict[int, Callable[[], None]] = {}
+        actions = self._actions
+
+        class Receiver(QWidget):                      # never shown; its handle receives WM_HOTKEY
+            def nativeEvent(self, event_type, message):
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == WM_HOTKEY and msg.wParam in actions:
+                    log.info("快捷键按下：%s", msg.wParam)
+                    QTimer.singleShot(0, actions[msg.wParam])        # out of the window procedure first
+                    return True, 0
+                return False, 0
+
+        self._window = Receiver()
+        self._hwnd = int(self._window.winId())
         self.failed: list[str] = []
         for number, (combo, action) in enumerate(keys.items(), start=1):
             mods, vk = parse(combo)
@@ -84,31 +99,11 @@ class WindowsHotkeys:
             else:
                 self.failed.append(combo)
                 log.warning("快捷键登记失败（可能被别的程序占用）：%s，错误码 %s", combo, ctypes.GetLastError())
-        actions, hwnd = self._actions, self._hwnd
-
-        class Filter(QAbstractNativeEventFilter):
-            def nativeEventFilter(self, event_type, message):
-                if bytes(event_type) == b"windows_generic_MSG":
-                    msg = wintypes.MSG.from_address(int(message))
-                    if msg.message == WM_HOTKEY and msg.hWnd == hwnd and msg.wParam in actions:
-                        log.info("快捷键按下：%s", msg.wParam)
-                        QTimer.singleShot(0, actions[msg.wParam])    # out of the window procedure first
-                        return True, 0
-                return False, 0
-
-        self._filter = Filter()
-        QCoreApplication.instance().installNativeEventFilter(self._filter)
 
     def stop(self):
-        from PySide6.QtCore import QCoreApplication
-
         for number in self._actions:
             self._user32.UnregisterHotKey(self._hwnd, number)
         self._actions.clear()
-        app = QCoreApplication.instance()
-        if app is not None and self._filter is not None:
-            app.removeNativeEventFilter(self._filter)
-        self._filter = None
         self._window.deleteLater()
 
 

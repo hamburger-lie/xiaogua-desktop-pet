@@ -1610,6 +1610,39 @@ def build_agent(config: Config):
     return agent, None
 
 
+GIL_SWITCH_S = 0.001         # the worker thread hands the GIL back this often (Python's default: 5 ms)
+STALL_S = 4.0                # the GUI thread silent this long: where it is stuck goes in the log
+
+
+def watch_for_stalls(stall_s: float = STALL_S, every_s: float = 1.0) -> QTimer:
+    """If the GUI thread stops answering for `stall_s`, log where it is stuck (code lines only,
+    nothing the user wrote). Windows shows its blank 「未响应」 frames then; the log says why.
+    Keep the returned timer alive: it is the GUI thread's heartbeat (its `halt` ends the watch)."""
+    import logging
+    import traceback
+
+    gui = threading.get_ident()
+    beat = [time.monotonic()]
+    timer = QTimer()
+    timer.timeout.connect(lambda: beat.__setitem__(0, time.monotonic()))
+    timer.start(int(every_s * 500))
+    timer.halt = threading.Event()
+
+    def watch():
+        reported = None
+        while not timer.halt.is_set():
+            time.sleep(every_s)
+            silent = time.monotonic() - beat[0]
+            if silent > stall_s and beat[0] != reported:
+                reported = beat[0]                    # once per stall
+                frame = sys._current_frames().get(gui)
+                where = "".join(traceback.format_stack(frame)[-8:]) if frame is not None else "?"
+                logging.getLogger("xiaogua").warning("界面卡住了 %.1f 秒，卡在：\n%s", silent, where)
+
+    threading.Thread(target=watch, daemon=True, name="stall-watch").start()
+    return timer
+
+
 def setup_logging() -> None:
     import logging
     from logging.handlers import RotatingFileHandler
@@ -1839,6 +1872,7 @@ def claim_single_instance(on_wake):
         return None
     QLocalServer.removeServer(SERVER_NAME)        # a stale name left by a crash
     server = QLocalServer()
+    server.setSocketOptions(QLocalServer.UserAccessOption)   # other users on this PC cannot poke it
     server.listen(SERVER_NAME)
     server.newConnection.connect(lambda: (server.nextPendingConnection(), on_wake()))
     return server
@@ -1882,6 +1916,9 @@ def main(argv: list[str] | None = None) -> int:
         return selftest(args.selftest)
 
     setup_logging()
+    # The worker thread (model calls, 黄历, checks) shares the GIL with the window; at the default
+    # 5 ms every Qt callback waited that long for it, and a repaint full of them froze the window.
+    sys.setswitchinterval(GIL_SWITCH_S)
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("每日一瓜")
@@ -1899,6 +1936,7 @@ def main(argv: list[str] | None = None) -> int:
         config.model = args.model
     companion = holder["companion"] = Companion(config)
     companion.start(quiet=args.autostart)
+    heartbeat = watch_for_stalls()  # noqa: F841 — kept alive until the app ends
     return app.exec()
 
 

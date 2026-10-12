@@ -44,29 +44,50 @@ def mouse(widget, kind, point: QPoint, buttons=Qt.NoButton, button=Qt.NoButton):
     QApplication.sendEvent(widget, QMouseEvent(kind, local, QPointF(point), button, buttons, Qt.NoModifier))
 
 
-def test_the_edges_and_corners_are_found(pet):
+def grip(panel, edges):
+    return next(g for g in panel.grips if g.edges == edges)
+
+
+def global_rect(widget) -> QRect:
+    return QRect(widget.mapToGlobal(QPoint(0, 0)), widget.size())
+
+
+def test_the_grips_lie_on_the_edges_and_corners(pet):
     panel = pet.chat
     rect = panel_rect(panel)
-    mid_y = rect.center().y()
-    assert panel._edges_at(QPoint(rect.right() + 3, mid_y)) == Qt.RightEdge           # in the shadow
-    assert panel._edges_at(QPoint(rect.right() - 2, mid_y)) == Qt.RightEdge           # just inside
-    assert panel._edges_at(QPoint(rect.left() + 1, mid_y)) == Qt.LeftEdge
-    assert panel._edges_at(QPoint(rect.center().x(), rect.bottom())) == Qt.BottomEdge
-    assert panel._edges_at(QPoint(rect.right(), rect.bottom() - 10)) == Qt.RightEdge | Qt.BottomEdge
-    assert panel._edges_at(rect.center()) == chat._NO_EDGE
-    assert panel._edges_at(QPoint(rect.right() + 20, mid_y)) == chat._NO_EDGE         # beyond the shadow
+    mid = rect.center()
+    assert global_rect(grip(panel, Qt.RightEdge)).contains(QPoint(rect.right() + 3, mid.y()))   # in the shadow
+    assert global_rect(grip(panel, Qt.RightEdge)).contains(QPoint(rect.right() - 2, mid.y()))   # just inside
+    assert global_rect(grip(panel, Qt.LeftEdge)).contains(QPoint(rect.left() + 1, mid.y()))
+    assert global_rect(grip(panel, Qt.BottomEdge)).contains(QPoint(mid.x(), rect.bottom()))
+    assert global_rect(grip(panel, Qt.RightEdge | Qt.BottomEdge)).contains(QPoint(rect.right(), rect.bottom() - 8))
+    assert not any(global_rect(g).contains(mid) for g in panel.grips)                     # the middle is the chat's
+    assert not any(global_rect(g).contains(QPoint(rect.right() + 20, mid.y())) for g in panel.grips)
     assert chat.edge_cursor(Qt.LeftEdge) == Qt.SizeHorCursor
     assert chat.edge_cursor(Qt.LeftEdge | Qt.TopEdge) == Qt.SizeFDiagCursor
-    assert chat.edge_cursor(chat._NO_EDGE) is None
+    assert chat.edge_cursor(Qt.Edge(0)) is None
 
 
-def test_hovering_an_edge_shows_the_resize_arrow(pet):
+def test_each_grip_shows_its_resize_arrow_and_follows_a_resize(pet):
     panel = pet.chat
-    rect = panel_rect(panel)
-    mouse(panel.feed, QEvent.MouseMove, QPoint(rect.right() - 1, rect.center().y()))
-    assert panel.cursor().shape() == Qt.SizeHorCursor
-    mouse(panel.feed, QEvent.MouseMove, rect.center())
-    assert panel.cursor().shape() == Qt.ArrowCursor
+    assert grip(panel, Qt.RightEdge).cursor().shape() == Qt.SizeHorCursor
+    assert grip(panel, Qt.TopEdge).cursor().shape() == Qt.SizeVerCursor
+    assert grip(panel, Qt.RightEdge | Qt.BottomEdge).cursor().shape() == Qt.SizeFDiagCursor
+    panel.resize(560, 600)
+    assert global_rect(grip(panel, Qt.RightEdge)).contains(QPoint(panel_rect(panel).right(), panel_rect(panel).center().y()))
+
+
+def test_no_python_runs_for_every_event_of_the_app(pet):
+    """The freeze: an application-wide event filter ran for each event while the worker held the GIL."""
+    assert not hasattr(pet.chat, "_edge_event")
+
+
+def drag(panel, edges, start: QPoint, end: QPoint):
+    handle = grip(panel, edges)
+    mouse(handle, QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton)
+    assert panel._resizing is not None                      # offscreen: no system resize, done by hand
+    mouse(handle, QEvent.MouseMove, end, Qt.LeftButton)
+    mouse(handle, QEvent.MouseButtonRelease, end, Qt.NoButton, Qt.LeftButton)
 
 
 def test_dragging_the_left_edge_makes_it_wider_and_keeps_the_right_side_put(pet):
@@ -74,10 +95,7 @@ def test_dragging_the_left_edge_makes_it_wider_and_keeps_the_right_side_put(pet)
     rect = panel_rect(panel)
     before = panel.geometry()
     start = QPoint(rect.left() + 1, rect.center().y())
-    mouse(panel.feed, QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton)
-    assert panel._resizing is not None                      # offscreen: no system resize, done by hand
-    mouse(panel.feed, QEvent.MouseMove, start - QPoint(120, 0), Qt.LeftButton)
-    mouse(panel.feed, QEvent.MouseButtonRelease, start - QPoint(120, 0), Qt.NoButton, Qt.LeftButton)
+    drag(panel, Qt.LeftEdge, start, start - QPoint(120, 0))
     after = panel.geometry()
     assert after.width() == before.width() + 120 and after.right() == before.right()
     assert after.height() == before.height()
@@ -87,9 +105,7 @@ def test_it_never_gets_smaller_than_its_minimum(pet):
     panel = pet.chat
     rect = panel_rect(panel)
     start = QPoint(rect.right(), rect.bottom())
-    mouse(panel.feed, QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton)
-    mouse(panel.feed, QEvent.MouseMove, start - QPoint(1000, 1000), Qt.LeftButton)
-    mouse(panel.feed, QEvent.MouseButtonRelease, start, Qt.NoButton, Qt.LeftButton)
+    drag(panel, Qt.RightEdge | Qt.BottomEdge, start, start - QPoint(1000, 1000))
     assert (panel.width(), panel.height()) == chat.CHAT_MIN
 
 
@@ -97,9 +113,7 @@ def test_the_size_is_remembered_and_used_next_time(pet):
     panel = pet.chat
     rect = panel_rect(panel)
     start = QPoint(rect.center().x(), rect.bottom())
-    mouse(panel.feed, QEvent.MouseButtonPress, start, Qt.LeftButton, Qt.LeftButton)
-    mouse(panel.feed, QEvent.MouseMove, start - QPoint(0, 80), Qt.LeftButton)
-    mouse(panel.feed, QEvent.MouseButtonRelease, start, Qt.NoButton, Qt.LeftButton)
+    drag(panel, Qt.BottomEdge, start, start - QPoint(0, 80))
     for _ in range(60):                                      # saved once the drag stops (400 ms)
         QTest.qWait(50)
         if Config.load().chat_size is not None:
@@ -121,11 +135,11 @@ def test_a_remembered_size_bigger_than_the_screen_is_cut_to_fit(pet):
 
 
 def test_clicks_inside_still_reach_the_chat(pet):
-    """Away from the edges nothing changes: the header still drags the window, buttons still work."""
+    """Away from the edges nothing changes: a press in the chat starts no resize."""
     panel = pet.chat
     rect = panel_rect(panel)
     mouse(panel.feed, QEvent.MouseButtonPress, rect.center(), Qt.LeftButton, Qt.LeftButton)
-    assert panel._resizing is None
+    assert panel._resizing is None and QApplication.widgetAt(rect.center()) not in panel.grips
     mouse(panel.feed, QEvent.MouseButtonRelease, rect.center(), Qt.NoButton, Qt.LeftButton)
 
 
@@ -151,3 +165,17 @@ def test_just_opening_the_chat_saves_no_size(pet):
     pet.open_chat()
     QTest.qWait(600)
     assert Config.load().chat_size is None and not pet.chat._size_timer.isActive()
+
+
+def test_a_frozen_window_is_logged_with_where_it_was_stuck(caplog):
+    """Windows only shows blank 「未响应」 frames; the log says which line held the window."""
+    import logging
+    import time
+    watch = companion.watch_for_stalls(stall_s=0.2, every_s=0.05)
+    with caplog.at_level(logging.WARNING, logger="xiaogua"):
+        time.sleep(0.6)                                       # the GUI thread blocked
+        QTest.qWait(200)
+    watch.stop()
+    watch.halt.set()
+    stuck = [r.getMessage() for r in caplog.records if "界面卡住" in r.getMessage()]
+    assert stuck and "test_a_frozen_window_is_logged" in stuck[0]

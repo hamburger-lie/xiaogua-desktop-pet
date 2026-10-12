@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter,
                            QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
@@ -23,7 +23,8 @@ from . import harness
 APP_TITLE = "每日一瓜"
 CHAT_SIZE = (400, 580)        # the chat window (shadow margin included) until the user resizes it
 CHAT_MIN = (340, 420)
-EDGE_OUT, EDGE_IN, EDGE_CORNER = 6, 4, 16   # px around the panel's edge that resize it; corners reach further
+EDGE_OUT, EDGE_IN, EDGE_CORNER = 6, 4, 12   # the grab strips: px outside / inside the panel's edge; corner squares
+SHADOW = 14                   # the margin round the panel that holds its shadow
 QUICK_QUESTIONS = ("我今天适合干嘛", "帮我挑个好日子", "今天几点出门好")
 BUBBLE_MAX = 268              # widest text in a bubble while the window is its first 400 wide
 BUBBLE_SIDES = 132            # window width that is not bubble text: shadow, margins, avatar, padding
@@ -116,10 +117,6 @@ def screen_rect_for(point: QPoint):
     return screen.availableGeometry()
 
 
-_MOUSE_EVENTS = (QEvent.MouseMove, QEvent.MouseButtonPress, QEvent.MouseButtonRelease)
-_NO_EDGE = Qt.Edge(0)
-
-
 def edge_cursor(edges) -> Qt.CursorShape | None:
     """The resize arrow for a set of edges (None: not on an edge)."""
     left, right = bool(edges & Qt.LeftEdge), bool(edges & Qt.RightEdge)
@@ -133,6 +130,50 @@ def edge_cursor(edges) -> Qt.CursorShape | None:
     if top or bottom:
         return Qt.SizeVerCursor
     return None
+
+
+class EdgeGrip(QWidget):
+    """An invisible strip along one edge (or a square at a corner) of the chat: its own resize
+    arrow, and a press there resizes the window.
+
+    These replace an application-wide event filter that ran Python for every event of every
+    widget. While the worker thread computed, each of those calls waited for the GIL, and one
+    repaint could take seconds: Windows then showed 「未响应」 frames.
+    """
+
+    def __init__(self, chat: "ChatPanel", edges):
+        super().__init__(chat)
+        self.chat, self.edges = chat, edges
+        self.setCursor(edge_cursor(edges))
+        # Alpha 1 of 255: unseen, but a layered window lets clicks through pixels that are fully clear.
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background: rgba(0, 0, 0, 1);")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.chat.begin_resize(self.edges, event.globalPosition().toPoint())
+
+    def mouseMoveEvent(self, event):
+        if self.chat._resizing is not None:
+            self.chat._resize_to(event.globalPosition().toPoint())
+
+    def mouseReleaseEvent(self, _event):
+        self.chat._resizing = None
+
+
+def open_web_link(url: str) -> bool:
+    """A link clicked in a message: open it in the browser only if it is a web page.
+
+    Messages are written by the model, so their links are not ours to trust: with Qt's
+    setOpenExternalLinks a 「file:///…/x.exe」 or 「\\\\server\\share\\x.exe」 link would run a program.
+    """
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    link = QUrl(url.strip())
+    if link.scheme().lower() not in ("http", "https") or not link.host():
+        return False
+    return QDesktopServices.openUrl(link)
 
 
 def shown_answer(text: str) -> str:
@@ -199,7 +240,7 @@ class Message(QFrame):
         self.body = QLabel(objectName="body")
         self.body.setWordWrap(True)
         self.body.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
-        self.body.setOpenExternalLinks(True)
+        self.body.linkActivated.connect(open_web_link)      # never setOpenExternalLinks: see open_web_link
         self.body.setTextFormat(Qt.PlainText if kind in ("mine", "typing") else Qt.MarkdownText)
         self.body.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.body.setContextMenuPolicy(Qt.NoContextMenu)          # right-click goes to the bubble's menu
@@ -388,14 +429,17 @@ class ChatPanel(QWidget):
         body.addWidget(self._composer())
         self.resize(*CHAT_SIZE)
 
-        # Resizing by the edges: a frameless window has none of its own (see _edge_event).
+        # Resizing by the edges: a frameless window has none of its own (EdgeGrip).
         self.preferred_size: tuple[int, int] | None = None     # set by the pet from the settings
         self.setMinimumSize(*CHAT_MIN)
         self._resizing = None                  # (edges, pointer, geometry) while resized by hand
         self._dragged = False                  # the user grabbed an edge: the next resizes are theirs
         self._size_timer = QTimer(self, singleShot=True, interval=400)
         self._size_timer.timeout.connect(self._remember_size)
-        QApplication.instance().installEventFilter(self)
+        left, right, top, bottom = Qt.LeftEdge, Qt.RightEdge, Qt.TopEdge, Qt.BottomEdge
+        self.grips = [EdgeGrip(self, edges) for edges in (
+            left, right, top, bottom, left | top, right | top, left | bottom, right | bottom)]
+        self._place_grips()
 
     # building -------------------------------------------------------------
     def _icon_button(self, name: str, tip: str, handler) -> QPushButton:
@@ -518,9 +562,6 @@ class ChatPanel(QWidget):
 
     # input ----------------------------------------------------------------
     def eventFilter(self, watched, event):
-        if event.type() in _MOUSE_EVENTS and isinstance(watched, QWidget) and watched.window() is self:
-            if self._edge_event(event):
-                return True
         if watched is self.edit:
             if event.type() == event.Type.KeyPress:
                 if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
@@ -809,51 +850,33 @@ class ChatPanel(QWidget):
 
     # window ---------------------------------------------------------------
     # resizing by the edges -----------------------------------------------------
-    def _edges_at(self, point: QPoint):
-        """The panel edges a screen point is on: a band from EDGE_OUT outside the panel (its
-        shadow) to EDGE_IN inside it; near a corner the band reaches EDGE_CORNER along both sides."""
-        if not self.isVisible():
-            return _NO_EDGE
-        rect = QRect(self.panel.mapToGlobal(QPoint(0, 0)), self.panel.size())
-        if not rect.adjusted(-EDGE_OUT, -EDGE_OUT, EDGE_OUT, EDGE_OUT).contains(point):
-            return _NO_EDGE
-        inside = {Qt.LeftEdge: point.x() - rect.left(), Qt.RightEdge: rect.right() - point.x(),
-                  Qt.TopEdge: point.y() - rect.top(), Qt.BottomEdge: rect.bottom() - point.y()}
-        edges = _NO_EDGE
-        for edge, distance in inside.items():
-            if distance <= EDGE_IN:
-                edges |= edge
-        if edges:                                        # on an edge: near its ends is a corner
-            for edge, distance in inside.items():
-                if distance <= EDGE_CORNER:
-                    edges |= edge
-        return edges
+    def _place_grips(self):
+        """Lay the strips along the panel's edges, half in its shadow, and the squares on its corners."""
+        if not hasattr(self, "grips"):
+            return
+        panel = self.rect().adjusted(SHADOW, SHADOW, -SHADOW, -SHADOW)
+        band, corner = EDGE_OUT + EDGE_IN, EDGE_OUT + EDGE_CORNER
+        x0, y0 = panel.left() - EDGE_OUT, panel.top() - EDGE_OUT
+        x1, y1 = panel.right() - EDGE_IN + 1, panel.bottom() - EDGE_IN + 1
+        long_w, long_h = panel.width() - 2 * EDGE_CORNER, panel.height() - 2 * EDGE_CORNER
+        spots = [QRect(x0, panel.top() + EDGE_CORNER, band, long_h),             # left
+                 QRect(x1, panel.top() + EDGE_CORNER, band, long_h),             # right
+                 QRect(panel.left() + EDGE_CORNER, y0, long_w, band),            # top
+                 QRect(panel.left() + EDGE_CORNER, y1, long_w, band),            # bottom
+                 QRect(x0, y0, corner, corner),
+                 QRect(panel.right() - EDGE_CORNER + 1, y0, corner, corner),
+                 QRect(x0, panel.bottom() - EDGE_CORNER + 1, corner, corner),
+                 QRect(panel.right() - EDGE_CORNER + 1, panel.bottom() - EDGE_CORNER + 1, corner, corner)]
+        for grip, spot in zip(self.grips, spots):
+            grip.setGeometry(spot)
+            grip.raise_()
 
-    def _edge_event(self, event) -> bool:
-        """Mouse events anywhere in the window: the resize arrow on the edges, and the resize
-        itself. True when the event was the resize's (the widget under the mouse must not get it)."""
-        point = event.globalPosition().toPoint()
-        if self._resizing is not None:
-            if event.type() == QEvent.MouseMove:
-                self._resize_to(point)
-            elif event.type() == QEvent.MouseButtonRelease:
-                self._resizing = None
-            return True
-        edges = self._edges_at(point)
-        if event.type() == QEvent.MouseMove and not event.buttons():
-            shape = edge_cursor(edges)
-            if shape is None:
-                self.unsetCursor()
-            else:
-                self.setCursor(shape)
-            return False
-        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton and edges:
-            self._dragged = True                     # opening the chat sizes it too: that is not the user's
-            handle = self.windowHandle()
-            if handle is None or not handle.startSystemResize(edges):     # Windows does it smoothly
-                self._resizing = (edges, point, QRect(self.geometry()))
-            return True
-        return False
+    def begin_resize(self, edges, point: QPoint):
+        """A press on a strip: Windows resizes the window smoothly; elsewhere it is done by hand."""
+        self._dragged = True                         # opening the chat sizes it too: that is not the user's
+        handle = self.windowHandle()
+        if handle is None or not handle.startSystemResize(edges):
+            self._resizing = (edges, point, QRect(self.geometry()))
 
     def _resize_to(self, point: QPoint):
         """By hand, where the system cannot: move the dragged edges, keep the others put."""
@@ -873,6 +896,7 @@ class ChatPanel(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._place_grips()
         widest = max(160, self.width() - BUBBLE_SIDES)
         if widest != Message.max_width:          # the bubbles wrap to the new width
             Message.max_width = widest
