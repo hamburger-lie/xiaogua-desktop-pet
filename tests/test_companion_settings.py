@@ -114,6 +114,15 @@ def test_settings_apply_live_to_the_pet():
     assert app.tray_actions["through"].isChecked()
 
 
+def test_switches_on_the_pet_reach_the_settings_window():
+    app = companion.Companion(config.Config.load())
+    app.pet.set_setting("lock_position", True)
+    app.pet.resize_by_user(300)
+    assert app.settings.lock_box.isChecked() and app.settings.size_slider.value() == 300
+    assert config.Config.load().lock_position and config.Config.load().pet_size == 300
+    assert all(not action.icon().isNull() for action in app.tray_actions.values())
+
+
 def test_tray_toggles_click_through_and_saves_it():
     app = companion.Companion(config.Config.load())
     app.toggle_click_through()

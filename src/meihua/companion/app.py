@@ -26,13 +26,13 @@ from datetime import date, datetime
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from PySide6.QtCore import QObject, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 import meihua
 
 from .config import Config, history_dir, home
-from . import life
+from . import life, look
 from .memory import Memory
 from .session import Session
 from .trash import Trash
@@ -326,6 +326,9 @@ class Bridge(QObject):
 
 BUBBLE_WIDTH = 300            # an answer's bubble; short notices keep to NOTE_WIDTH
 NOTE_WIDTH = 260
+BUBBLE_FONT_PX = {"小": 12, "标准": 13, "大": 16}    # 设置 → 外观 → 气泡字号
+BUBBLE_TIPS = {"ask": "Enter 发送 · Esc 收起 · 右键小瓜可打开完整对话",     # shown until done once
+               "answer": "点气泡看完整对话"}
 BUBBLE_CHARS = 260            # longer answers are cut in the bubble; the chat panel has them whole
 BUBBLE_STREAM_MS = 120        # the streamed answer is redrawn at most this often
 ASK_IDLE_S = 60               # an input box left empty this long goes away
@@ -369,6 +372,7 @@ class Bubble(QWidget):
     which has the whole conversation.
     """
     asked = Signal(str)          # the user typed a question into the bubble
+    learnt = Signal(str)         # a first-time tip was acted on ("ask", "answer"): it is not shown again
 
     def __init__(self, on_click=None):
         from PySide6.QtWidgets import QLineEdit
@@ -378,17 +382,15 @@ class Bubble(QWidget):
         self.mode = "note"                               # note / ask / thinking / answer
         self.setAttribute(Qt.WA_TranslucentBackground)
         font = "font-family: 'Microsoft YaHei';"
+        self.scale = 1.0                                 # 气泡字号: text and widths grow together
+        self.learnt_tips: set[str] = set()               # BUBBLE_TIPS already acted on (the pet's config)
         self.label = QLabel(self)
         self.label.setWordWrap(True)
         self.label.setTextFormat(Qt.MarkdownText)
-        self.label.setStyleSheet(f"color: {INK.name()}; {font} font-size: 13px; background: transparent;")
         self.label.setMaximumWidth(NOTE_WIDTH)
         self.input = QLineEdit(self)
         self.input.setPlaceholderText("问小瓜…")
-        self.input.setMinimumWidth(240)
-        self.input.setStyleSheet(f"QLineEdit {{ {font} font-size: 13px; color: {INK.name()}; background: #FFFFFF;"
-                                 " border: 1px solid #C9D3B5; border-radius: 12px; padding: 5px 10px; }"
-                                 " QLineEdit:focus { border-color: #8FAE72; }")
+        self.set_font_size("标准")
         self.input.returnPressed.connect(self.send)
         self.input.installEventFilter(self)
         self.input.hide()
@@ -410,6 +412,17 @@ class Bubble(QWidget):
         self._stream_timer = QTimer(self, singleShot=True, interval=BUBBLE_STREAM_MS)
         self._stream_timer.timeout.connect(self._show_stream)
         self._pet_geometry = None
+
+    def set_font_size(self, name: str):
+        """气泡字号 小 / 标准 / 大: the words, the input box and the bubble's width, in step."""
+        size = BUBBLE_FONT_PX.get(name, BUBBLE_FONT_PX["标准"])
+        self.scale = size / BUBBLE_FONT_PX["标准"]
+        font = "font-family: 'Microsoft YaHei';"
+        self.label.setStyleSheet(f"color: {INK.name()}; {font} font-size: {size}px; background: transparent;")
+        self.input.setMinimumWidth(round(240 * self.scale))
+        self.input.setStyleSheet(f"QLineEdit {{ {font} font-size: {size}px; color: {INK.name()}; background: #FFFFFF;"
+                                 " border: 1px solid #C9D3B5; border-radius: 12px; padding: 5px 10px; }"
+                                 " QLineEdit:focus { border-color: #8FAE72; }")
 
     @property
     def asking(self) -> bool:
@@ -460,7 +473,7 @@ class Bubble(QWidget):
         self.mode = mode
         self._stream_timer.stop()
         self._pet_geometry = pet_geometry
-        self.label.setMaximumWidth(width)
+        self.label.setMaximumWidth(round(width * self.scale))
         self._set_label(text)
         self.input.setVisible(mode == "ask")
         self.footer.setText(footer)
@@ -484,8 +497,7 @@ class Bubble(QWidget):
 
         self.input.clear()
         self.listening(False)
-        self._show("ask", text, pet_geometry, ASK_IDLE_S, "Enter 发送 · Esc 收起 · 右键小瓜可打开完整对话",
-                   width=BUBBLE_WIDTH)
+        self._show("ask", text, pet_geometry, ASK_IDLE_S, self._tip("ask"), width=BUBBLE_WIDTH)
         bring_to_front(self)
         self.input.setFocus()
 
@@ -535,8 +547,17 @@ class Bubble(QWidget):
             self._show("answer", bubble_text(shown), self._pet_geometry, None, width=BUBBLE_WIDTH)
 
     def answer(self, text: str, pet_geometry):
-        self._show("answer", bubble_text(text), pet_geometry, answer_seconds(text), "点气泡看完整对话",
+        self._show("answer", bubble_text(text), pet_geometry, answer_seconds(text), self._tip("answer"),
                    width=BUBBLE_WIDTH)
+
+    def _tip(self, kind: str) -> str:
+        """A how-to line under the box or the answer, until it has been done once: a first-time lesson."""
+        return "" if kind in self.learnt_tips else BUBBLE_TIPS[kind]
+
+    def _learn(self, kind: str):
+        if kind not in self.learnt_tips:
+            self.learnt_tips.add(kind)
+            self.learnt.emit(kind)
 
     def send(self):
         text = self.input.text().strip()
@@ -546,6 +567,7 @@ class Bubble(QWidget):
         self.input.clear()
         self.input.setPlaceholderText("问小瓜…")
         self.asked.emit(text)
+        self._learn("ask")
 
     def eventFilter(self, watched, event):
         if watched is self.input and event.type() == event.Type.KeyPress and event.key() == Qt.Key_Escape:
@@ -596,6 +618,8 @@ class Bubble(QWidget):
         if self.mode == "ask":                           # a click beside the input box: keep typing
             self.input.setFocus()
             return
+        if self.mode == "answer":
+            self._learn("answer")                        # found the whole conversation: no more 「点气泡…」
         self.hide()
         if self.on_click:
             self.on_click()
@@ -609,6 +633,7 @@ class Pet(QWidget):
     mini_changed = Signal(bool)           # 贴边小球 switched; the tray and the settings follow
     reminded = Signal(str)                # a reminder was given: the tray tells it when 小瓜 cannot be seen
     trash_changed = Signal()              # something went into the trash or came back; 设置 → 回收站 follows
+    settings_changed = Signal()           # a setting changed from 小瓜 itself (its menu, Ctrl+wheel): all follow
 
     def __init__(self, agent, hotkey_label: str, config: Config | None = None):
         from .chat import ChatPanel
@@ -627,6 +652,7 @@ class Pet(QWidget):
         self.resize(size, size)
         self.bubble = Bubble(on_click=self.open_chat)
         self.bubble.asked.connect(self._ask_from_bubble)
+        self.bubble.learnt.connect(self._tip_learnt)
         self.bubble.input.textEdited.connect(lambda text: text.strip() and self._on_typing())
         self._bubble_draft, self._bubble_step = "", "小瓜在想"     # the answer as the bubble shows it
         self.chat = ChatPanel(load_avatar(96)[0][0], hotkey_label)
@@ -691,6 +717,9 @@ class Pet(QWidget):
         self.remind_timer = QTimer(self, interval=REMIND_MS)        # 到点提醒 (memory.py: a plan with a time)
         self.remind_timer.timeout.connect(self.check_reminders)
         self.remind_timer.start()
+        self.chatter_timer = QTimer(self, singleShot=True)          # 随口说两句 (life.chatter_line)
+        self.chatter_timer.timeout.connect(self._chatter)
+        self.chatter_timer.start(life.chatter_delay(self.config.chatter_often))
         self.pats = life.PatDetector()
         self.setMouseTracking(True)                                 # patting needs moves without a button
         self._talking_until = 0.0                                   # the answer is arriving: talk bounce
@@ -731,6 +760,11 @@ class Pet(QWidget):
                 self._refresh_welcome()
         self.sleep_ms = max(1, config.sleep_minutes) * 60_000
         self.idle_ms = max(3, config.bubble_seconds) * 1000
+        self.bubble.set_font_size(config.bubble_font)
+        self.bubble.learnt_tips = set(config.learnt)
+        if hasattr(self, "chatter_timer") and getattr(self, "_chatter_often", None) != config.chatter_often:
+            self._chatter_often = config.chatter_often           # 偶尔 / 常常 changed: count from now
+            self.chatter_timer.start(life.chatter_delay(config.chatter_often))
         self.chat.set_hotkey_label(self.hotkey_label)
         self.setToolTip(f"小瓜 · 单击或按 {self.hotkey_label} 问我，右键「打开对话」看完整对话")
 
@@ -832,6 +866,21 @@ class Pet(QWidget):
                               and not self.listen_timer.isActive() and self.play("待机"))
         elif action:
             self.play(action, "待机")
+
+    def _chatter(self) -> str | None:
+        """随口说两句: only while idle and in sight, with 主动说话 正常, not at night, nothing else on
+        screen (no bubble, no chat panel). Not a good moment: look again in a few minutes."""
+        config = self.config
+        quiet = (not config.chatter or not life.allows(config.proactive, "chatter") or life.is_night()
+                 or not self.isVisible() or config.mini or config.click_through or self.busy or self._dragging
+                 or self.state != "待机" or self.bubble.isVisible() or self.chat.isVisible())
+        line = None if quiet else self.session.chatter(config.chatter_lines)
+        if line and self._say(line, 8):
+            self.play("点头", "待机")
+            self.chatter_timer.start(life.chatter_delay(config.chatter_often))
+            return line
+        self.chatter_timer.start(life.CHATTER_RETRY_MS if config.chatter else life.chatter_delay("偶尔"))
+        return None
 
     def _wake(self):
         if self.state == "睡着":
@@ -1420,6 +1469,10 @@ class Pet(QWidget):
         if self._drag is not None and event.buttons() & Qt.LeftButton:
             if (event.globalPosition().toPoint() - self._press).manhattanLength() < 5:
                 return                           # a click, not a drag yet
+            if self.config.lock_position:
+                self._drag = None                # 锁定位置: stays put; says once per drag why
+                self._say("位置锁住啦，右键小瓜可以解锁。", 4)
+                return
             if not self._dragging:
                 self._dragging = True
                 self.listen_timer.stop()
@@ -1485,7 +1538,7 @@ class Pet(QWidget):
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier and not self.config.mini:
             step = PET_STEP if event.angleDelta().y() > 0 else -PET_STEP
-            self.set_size(self.width() + step)
+            self.resize_by_user(self.width() + step)
 
     def set_size(self, size: int):
         """Resize around the feet: the bottom centre stays where the user put 小瓜."""
@@ -1496,30 +1549,57 @@ class Pet(QWidget):
         self.config.pet_size = size
         self.config.save()
 
+    def resize_by_user(self, size: int):
+        """Ctrl+wheel or the 大小 menu: resized, and the settings window's slider follows."""
+        self.set_size(size)
+        self.settings_changed.emit()
+
     def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        for label, handler in (("打开对话（完整记录）", self.open_chat),
-                               (f"问小瓜（单击 / {self.hotkey_label}）", self.ask_in_bubble)):
-            action = QAction(label, menu)
-            action.triggered.connect(handler)
-            menu.addAction(action)
-        sizes = menu.addMenu("大小（也可 Ctrl+滚轮）")
-        for name, size in PET_SIZES.items():
-            action = QAction(name, sizes, checkable=True, checked=self.width() == size)
-            action.triggered.connect(lambda _=False, s=size: self.set_size(s))
-            sizes.addAction(action)
+        self.context_menu().exec(event.globalPos())
+
+    def context_menu(self):
+        """Rounded cream menu with icons, in groups: talk / today / how 小瓜 sits / conversations / app."""
+        menu = look.menu(self)
+        look.add_action(menu, "问小瓜", self.ask_in_bubble, "问小瓜", shortcut=self.hotkey_label)
+        look.add_action(menu, "打开对话", self.open_chat, "打开对话")
+        look.add_action(menu, "今天怎么样", self.show_today, "今天")
         menu.addSeparator()
-        entries = [("变回小瓜" if self.config.mini else "缩成小球（不挡屏幕）",
-                    lambda: self.set_mini(not self.config.mini)),
-                   ("新对话", self._new_chat), ("删除这个对话…", self._confirm_delete_chat)]
+        sizes = look.menu(menu, "大小")
+        sizes.setIcon(look.icon("大小", look.LEAF_DARK))
+        for name, size in PET_SIZES.items():
+            look.add_action(sizes, name, lambda _=False, s=size: self.resize_by_user(s), checked=self.width() == size)
+        menu.addMenu(sizes)
+        look.add_action(menu, "变回小瓜" if self.config.mini else "缩成小球", lambda: self.set_mini(not self.config.mini),
+                        "小球")
+        look.add_action(menu, "锁定位置", lambda on: self.set_setting("lock_position", on), "锁定",
+                        checked=self.config.lock_position)
+        look.add_action(menu, "总在最前面", lambda on: self.set_setting("always_on_top", on), "置顶",
+                        checked=self.config.always_on_top)
+        menu.addSeparator()
+        look.add_action(menu, "新对话", self._new_chat, "新对话")
+        look.add_action(menu, "删除这个对话…", self._confirm_delete_chat, "删除")
+        menu.addSeparator()
         if self.open_settings:
-            entries.append(("设置…", self.open_settings))
-        entries.append(("退出每日一瓜", QApplication.quit))
-        for label, handler in entries:
-            action = QAction(label, menu)
-            action.triggered.connect(handler)
-            menu.addAction(action)
-        menu.exec(event.globalPos())
+            look.add_action(menu, "设置…", self.open_settings, "设置")
+        look.add_action(menu, "退出每日一瓜", QApplication.quit, "退出")
+        return menu
+
+    def _tip_learnt(self, kind: str):
+        """A bubble tip was acted on once: kept, so it is not shown again (after a restart either)."""
+        if kind not in self.config.learnt:
+            self.config.learnt = self.config.learnt + [kind]
+            self.config.save()
+
+    def set_setting(self, name: str, value):
+        """A switch flipped on 小瓜 itself: saved, applied, and the settings window follows."""
+        setattr(self.config, name, value)
+        self.config.save()
+        self.apply_config(self.config)
+        self.settings_changed.emit()
+
+    def show_today(self):
+        """「今天怎么样」 from the menu: today's line again (the morning one is said once a day)."""
+        self._say(self.session.greeting(mark=False), 15)
 
     # conversations -----------------------------------------------------------
     def _show_conversation(self):
@@ -1704,6 +1784,7 @@ class Companion(QObject):
         self.settings.memory_edited.connect(self.pet._refresh_welcome)
         self.settings.mini_requested.connect(self.set_mini)
         self.pet.mini_changed.connect(self._mini_changed)
+        self.pet.settings_changed.connect(lambda: self.apply(self.config))
         self.listener = None
         self._hotkey = None
         self.hotkey_problem = None                 # a hotkey that could not be had, said at start
@@ -1711,21 +1792,23 @@ class Companion(QObject):
 
         self.tray = QSystemTrayIcon(self.icon)
         self.tray.setToolTip("每日一瓜")
-        menu = QMenu()
+        menu = look.menu()
         self.tray_actions = {}
-        for key, label, handler in (
-                ("ask", "问小瓜", self.pet.summon),
-                ("chat", "打开对话", self.pet.open_chat),
-                ("toggle", "隐藏小瓜", self.toggle_pet),
-                ("mini", "缩成小球", lambda: self.set_mini(not self.config.mini)),
-                ("through", "鼠标穿透", self.toggle_click_through),
-                ("settings", "设置…", self.show_settings),
-                ("quit", "退出每日一瓜", QApplication.quit)):
-            action = QAction(label, menu)
-            action.triggered.connect(handler)
-            menu.addAction(action)
-            self.tray_actions[key] = action
-        self.tray_actions["through"].setCheckable(True)
+        for key, label, handler, icon_name in (
+                ("ask", "问小瓜", self.pet.summon, "问小瓜"),
+                ("chat", "打开对话", self.pet.open_chat, "打开对话"),
+                (None, None, None, None),
+                ("toggle", "隐藏小瓜", self.toggle_pet, "隐藏"),
+                ("mini", "缩成小球", lambda: self.set_mini(not self.config.mini), "小球"),
+                ("through", "鼠标穿透", self.toggle_click_through, "穿透"),
+                (None, None, None, None),
+                ("settings", "设置…", self.show_settings, "设置"),
+                ("quit", "退出每日一瓜", QApplication.quit, "退出")):
+            if key is None:
+                menu.addSeparator()
+                continue
+            self.tray_actions[key] = look.add_action(menu, label, handler, icon_name,
+                                                     checked=self.config.click_through if key == "through" else None)
         self.tray_actions["mini"].setText("变回小瓜" if config.mini else "缩成小球")
         self.tray_menu = menu                    # keep a reference: the tray does not own it
         menu.aboutToShow.connect(self._refresh_toggle)           # 小瓜 may have come back by the hotkey
@@ -1741,7 +1824,7 @@ class Companion(QObject):
         if hasattr(self.pet.agent, "voice_style"):
             self.pet.agent.voice_style = config.voice_style      # takes effect on the next question
         self.tray_actions["through"].setChecked(config.click_through)
-        self.tray_actions["ask"].setText(f"问小瓜（{self.pet.hotkey_label}）")
+        self.tray_actions["ask"].setText(f"问小瓜\t{self.pet.hotkey_label}")
         self.settings.sync_from(config)
         if (config.hotkey, config.voice_hotkey) != self._hotkey:
             self.restart_hotkey()

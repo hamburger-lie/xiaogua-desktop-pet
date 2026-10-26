@@ -10,60 +10,125 @@ from __future__ import annotations
 import os
 import threading
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QPushButton, QSlider, QSpinBox, QStackedWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSlider,
+                               QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 import meihua
 
 from . import config as cfg
 from . import providers
-
-CREAM, PAPER, INK, LEAF, LEAF_DARK, LINE, MUTED = (
-    "#FAF8F0", "#FFFFFF", "#2F4737", "#8FAE72", "#6E8F55", "#B7C69B", "#8C9687")
-GOOD, BAD = "#5E8C4A", "#B5533C"
-UI = (meihua.ROOT / "assets" / "ui").as_posix()      # icons for the stylesheet
+from .look import (BAD, CARD_LINE, CREAM, DIVIDER, GOOD, INK, LEAF, LEAF_DARK, LINE, MUTED, PAPER, PICKED,
+                   SIDEBAR, UI)
+from .look import icon as _icon
 
 ZODIAC = "鼠牛虎兔龙蛇马羊猴鸡狗猪"
 NO_ZODIAC = "不设置"
 
+# page → section → card → row (label and hint on the left, the control on the right), as in
+# dsh-pet-indesktop's settings, in 小瓜's colours.
 STYLE = f"""
-QWidget {{ background: {CREAM}; color: {INK}; font-family: 'Microsoft YaHei'; font-size: 13px; }}
-QListWidget {{ background: #F1F4E6; border: none; border-right: 1px solid {LINE}; padding-top: 10px;
-               font-size: 14px; outline: 0; }}
-QListWidget::item {{ padding: 10px 18px; border-radius: 8px; margin: 2px 8px; }}
-QListWidget::item:selected {{ background: {LEAF}; color: white; }}
-QListWidget::item:hover:!selected {{ background: #E3EBD2; }}
-QLabel#title {{ font-size: 18px; font-weight: bold; }}
-QListWidget#memory {{ background: {PAPER}; border: 1px solid {LINE}; border-radius: 8px; padding: 4px;
-                      font-size: 13px; }}
-QListWidget#memory::item {{ padding: 6px 10px; margin: 1px 2px; }}
+QWidget {{ color: {INK}; font-family: 'Microsoft YaHei'; font-size: 13px; }}
+QWidget#settings, QWidget#pageBody, QScrollArea, QScrollArea > QWidget {{ background: {CREAM}; border: none; }}
+QListWidget#nav {{ background: {SIDEBAR}; border: none; border-right: 1px solid {CARD_LINE}; padding: 14px 0;
+                   font-size: 14px; outline: 0; }}
+QListWidget#nav::item {{ padding: 9px 10px; border-radius: 9px; margin: 2px 10px; }}
+QListWidget#nav::item:selected {{ background: {LEAF}; color: white; }}
+QListWidget#nav::item:hover:!selected {{ background: {PICKED}; }}
+QLabel#title {{ font-size: 22px; font-weight: bold; }}
+QLabel#subtitle {{ color: {MUTED}; font-size: 12px; }}
+QLabel#section {{ color: #556B4C; font-size: 13px; font-weight: bold; }}
+QFrame#card {{ background: {PAPER}; border: 1px solid {CARD_LINE}; border-radius: 12px; }}
+QFrame#divider {{ background: {DIVIDER}; border: none; }}
 QLabel#hint {{ color: {MUTED}; font-size: 12px; }}
-QLineEdit, QComboBox, QSpinBox {{ background: {PAPER}; border: 1px solid {LINE}; border-radius: 8px;
-                                  padding: 5px 8px; min-height: 20px; }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 1px solid {LEAF}; }}
+QListWidget#memory {{ background: {PAPER}; border: 1px solid {LINE}; border-radius: 8px; padding: 4px;
+                      font-size: 13px; outline: 0; }}
+QListWidget#memory::item {{ padding: 6px 10px; margin: 1px 2px; border-radius: 6px; }}
+QListWidget#memory::item:selected {{ background: {PICKED}; color: {INK}; }}
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {{ background: {PAPER}; border: 1px solid {LINE}; border-radius: 8px;
+                                                  padding: 4px 8px; min-height: 22px; }}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{ border: 1px solid {LEAF}; }}
 QComboBox QAbstractItemView {{ background: {PAPER}; selection-background-color: {LEAF}; }}
-QPushButton {{ background: {PAPER}; border: 1px solid {LINE}; border-radius: 10px; padding: 5px 14px; }}
+QPushButton {{ background: {PAPER}; border: 1px solid {LINE}; border-radius: 9px; padding: 5px 14px; }}
 QPushButton:hover {{ background: #EEF2E2; }}
 QPushButton#primary {{ background: {LEAF}; color: white; border: none; font-weight: bold; }}
 QPushButton#primary:hover {{ background: {LEAF_DARK}; }}
 QPushButton#recording {{ background: #FFF6D8; border: 1px solid #D8B84A; }}
+QWidget#segmented {{ background: #EEF2E2; border-radius: 9px; }}
+QPushButton#segment {{ background: transparent; border: 1px solid transparent; border-radius: 7px;
+                       padding: 4px 14px; }}
+QPushButton#segment:hover:!checked {{ background: {PICKED}; }}
+QPushButton#segment:checked {{ background: {PAPER}; border: 1px solid {CARD_LINE}; color: {LEAF_DARK};
+                               font-weight: bold; }}
 QSlider::groove:horizontal {{ height: 6px; background: #E3EBD2; border-radius: 3px; }}
 QSlider::sub-page:horizontal {{ background: {LEAF}; border-radius: 3px; }}
 QSlider::handle:horizontal {{ background: white; border: 2px solid {LEAF}; width: 14px; margin: -6px 0;
                               border-radius: 9px; }}
 QCheckBox {{ spacing: 8px; }}
-QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {LINE}; border-radius: 4px;
-                        background: {PAPER}; }}
-QCheckBox::indicator:hover {{ border: 1px solid {LEAF}; }}
-QCheckBox::indicator:checked {{ background: {LEAF}; border: 1px solid {LEAF}; image: url({UI}/check.svg); }}
+QCheckBox::indicator {{ width: 38px; height: 22px; border: none; image: url({UI}/switch-off.svg); }}
+QCheckBox::indicator:hover {{ image: url({UI}/switch-off-hover.svg); }}
+QCheckBox::indicator:checked {{ image: url({UI}/switch-on.svg); }}
+QCheckBox::indicator:checked:hover {{ image: url({UI}/switch-on-hover.svg); }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox::down-arrow {{ image: url({UI}/chevron.svg); width: 14px; height: 14px; }}
 """
 
-PAGES = ("连接", "小瓜", "记忆", "回收站", "快捷键与启动", "关于")
+PAGES = ("连接", "小瓜", "外观", "互动", "记忆", "回收站", "快捷键与启动", "关于")
+CONTROL_WIDTH = 230           # combo boxes and sliders on the right of a row
+BUBBLE_FONTS = ("小", "标准", "大")
+CHATTER_OFTEN = ("偶尔", "常常")
+
+
+class Card(QFrame):
+    """A rounded white card of setting rows, a thin inset line between two rows."""
+
+    def __init__(self):
+        super().__init__(objectName="card")
+        self._rows = QVBoxLayout(self)
+        self._rows.setContentsMargins(0, 2, 0, 2)
+        self._rows.setSpacing(0)
+
+    def add(self, row: QWidget) -> QWidget:
+        if self._rows.count():
+            line = QFrame(objectName="divider")
+            line.setFixedHeight(1)
+            inset = QHBoxLayout()
+            inset.setContentsMargins(14, 0, 14, 0)
+            inset.addWidget(line)
+            self._rows.addLayout(inset)
+        self._rows.addWidget(row)
+        return row
+
+
+class Segmented(QWidget):
+    """Two or three choices side by side, the chosen one raised. Reads like a QComboBox to callers."""
+    currentTextChanged = Signal(str)
+
+    def __init__(self, choices, current: str):
+        super().__init__(objectName="segmented")
+        self.setAttribute(Qt.WA_StyledBackground)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(3, 3, 3, 3)
+        row.setSpacing(2)
+        self._group = QButtonGroup(self)
+        self._buttons = {}
+        for choice in choices:
+            button = QPushButton(choice, objectName="segment", checkable=True, checked=choice == current)
+            button.setCursor(Qt.PointingHandCursor)
+            self._group.addButton(button)
+            self._buttons[choice] = button
+            row.addWidget(button)
+        self._group.buttonToggled.connect(lambda button, on: on and self.currentTextChanged.emit(button.text()))
+
+    def currentText(self) -> str:
+        checked = self._group.checkedButton()
+        return checked.text() if checked else ""
+
+    def setCurrentText(self, text: str):
+        if text in self._buttons:
+            self._buttons[text].setChecked(True)
 
 
 class _Signals(QObject):
@@ -178,21 +243,25 @@ class SettingsWindow(QWidget):
     def __init__(self, config: cfg.Config, icon: QIcon | None = None):
         super().__init__()
         self.config = config
+        self.setObjectName("settings")
         self.setWindowTitle("每日一瓜 · 设置")
         if icon:
             self.setWindowIcon(icon)
         self.setStyleSheet(STYLE)
-        self.resize(720, 600)
+        self.setMinimumSize(720, 520)
+        self.resize(820, 640)
 
-        self.nav = QListWidget()
-        self.nav.addItems(PAGES)
-        self.nav.setFixedWidth(150)
+        self.nav = QListWidget(objectName="nav")
+        self.nav.setIconSize(QSize(18, 18))
+        for name in PAGES:
+            self.nav.addItem(QListWidgetItem(_icon(name, MUTED, "#FFFFFF"), f" {name}"))
+        self.nav.setFixedWidth(176)
         self.pages = QStackedWidget()
         self.memory = None
         self._memory_stats = None
         self.trash = None
-        for build in (self._connection_page, self._pet_page, self._memory_page, self._trash_page,
-                      self._start_page, self._about_page):
+        for build in (self._connection_page, self._pet_page, self._look_page, self._play_page,
+                      self._memory_page, self._trash_page, self._start_page, self._about_page):
             self.pages.addWidget(build())
         self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.nav.setCurrentRow(0)
@@ -206,28 +275,83 @@ class SettingsWindow(QWidget):
         self._untested_key = None          # (provider, key) typed in the box and being tested
 
     # helpers --------------------------------------------------------------
-    def _page(self, title: str, subtitle: str) -> tuple[QWidget, QFormLayout]:
-        page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 20)
-        heading = QLabel(title, objectName="title")
-        note = QLabel(subtitle, objectName="hint")
+    def _page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
+        """A scrolling page: a big title, a line under it, then sections (`_section`)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget(objectName="pageBody")
+        column = QVBoxLayout(body)
+        column.setContentsMargins(30, 24, 28, 24)
+        column.setSpacing(0)
+        column.addWidget(QLabel(title, objectName="title"))
+        column.addSpacing(4)
+        note = QLabel(subtitle, objectName="subtitle")
         note.setWordWrap(True)
-        outer.addWidget(heading)
-        outer.addWidget(note)
-        outer.addSpacing(10)
-        form = QFormLayout()
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(12)
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        outer.addLayout(form)
-        outer.addStretch()
-        return page, form
+        column.addWidget(note)
+        column.addSpacing(6)
+        scroll.setWidget(body)
+        return scroll, column
+
+    def _section(self, column: QVBoxLayout, title: str = "") -> Card:
+        """A titled card on the page; rows go in with `card.add(self._row(...))`."""
+        column.addSpacing(18)
+        if title:
+            column.addWidget(QLabel(title, objectName="section"))
+            column.addSpacing(7)
+        card = Card()
+        column.addWidget(card)
+        return card
+
+    def _row(self, label: str, control: QWidget | None = None, hint: str = "", below: bool = False,
+             note: QWidget | None = None) -> QWidget:
+        """One setting: its name and a grey line on the left, the control on the right (or `below`
+        the words, for lists and wide editors). `note` is a widget under the words (links, a status)."""
+        row = QWidget()
+        outer = QVBoxLayout(row)
+        outer.setContentsMargins(16, 11, 16, 11)
+        outer.setSpacing(8)
+        line = QHBoxLayout()
+        line.setSpacing(18)
+        words = QVBoxLayout()
+        words.setSpacing(2)
+        if label:
+            words.addWidget(QLabel(label, objectName="rowLabel"))
+        if hint:
+            words.addWidget(self._hint(hint))
+        if note is not None:
+            words.addWidget(note)
+        line.addLayout(words, 1)
+        if control is not None and not below:
+            line.addWidget(control, 0, Qt.AlignRight | Qt.AlignVCenter)
+        outer.addLayout(line)
+        if control is not None and below:
+            outer.addWidget(control)
+        return row
 
     def _hint(self, text: str) -> QLabel:
         label = QLabel(text, objectName="hint")
         label.setWordWrap(True)
         return label
+
+    @staticmethod
+    def _switch(on: bool, toggled) -> QCheckBox:
+        switch = QCheckBox()
+        switch.setCursor(Qt.PointingHandCursor)
+        switch.setChecked(on)
+        switch.toggled.connect(toggled)
+        return switch
+
+    @staticmethod
+    def _wrap(*widgets, stretch_first: bool = True) -> QWidget:
+        """Several controls side by side, as one control of a row."""
+        box = QWidget()
+        line = QHBoxLayout(box)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        for index, widget in enumerate(widgets):
+            line.addWidget(widget, 1 if stretch_first and index == 0 else 0)
+        return box
 
     def _set(self, name: str, value):
         if getattr(self.config, name) == value:
@@ -238,10 +362,11 @@ class SettingsWindow(QWidget):
 
     # 连接 -----------------------------------------------------------------
     def _connection_page(self) -> QWidget:
-        page, form = self._page("连接模型", "小瓜细讲黄历、卦象要用大模型。选一家厂商、填上密钥就行（旁边有申请链接）；"
-                                         "没有密钥时也能看今天的黄历、离线起卦给盘面。")
+        page, column = self._page("连接模型", "小瓜细讲黄历、卦象要用大模型。选一家厂商、填上密钥就行（旁边有申请链接）；"
+                                           "没有密钥时也能看今天的黄历、离线起卦给盘面。")
         self.provider_box = QComboBox()
         self.provider_box.setMaxVisibleItems(24)
+        self.provider_box.setFixedWidth(CONTROL_WIDTH)
         model = QStandardItemModel(self.provider_box)
         for group in providers.GROUPS:
             header = QStandardItem(f"—— {group} ——")
@@ -256,74 +381,69 @@ class SettingsWindow(QWidget):
         self.provider_box.setModel(model)
         self._select_provider(self.config.provider)
         self.provider_box.currentIndexChanged.connect(self._provider_changed)
-        form.addRow("厂商", self.provider_box)
         self.provider_info = QLabel(objectName="hint")
         self.provider_info.setWordWrap(True)
         self.provider_info.setOpenExternalLinks(True)
         self.provider_info.setTextFormat(Qt.RichText)
-        form.addRow("", self.provider_info)
+        card = self._section(column, "厂商")
+        card.add(self._row("厂商", self.provider_box, note=self.provider_info))
 
         self.base_url_edit = QLineEdit(placeholderText="https://…/v1")
         self.base_url_edit.editingFinished.connect(self._base_url_changed)
         reset = QPushButton("恢复默认")
         reset.clicked.connect(self._reset_base_url)
-        self.base_url_row = QWidget()
-        row = QHBoxLayout(self.base_url_row)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(self.base_url_edit, 1)
-        row.addWidget(reset)
-        form.addRow("接口地址", self.base_url_row)
-        self.base_url_label = form.labelForField(self.base_url_row)
+        self.base_url_row = self._wrap(self.base_url_edit, reset)
+        self.base_url_label = card.add(self._row("接口地址", self.base_url_row, below=True))
 
+        card = self._section(column, "密钥")
         self.key_source = QLabel()
-        form.addRow("当前密钥", self.key_source)
+        card.add(self._row("当前密钥", self.key_source))
         self.key_edit = QLineEdit(placeholderText="粘贴这家厂商的 API key")
         self.key_edit.setEchoMode(QLineEdit.Password)
         peek = QPushButton("显示")
         peek.setCheckable(True)
         peek.toggled.connect(lambda on: (self.key_edit.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password),
                                          peek.setText("隐藏" if on else "显示")))
-        self.key_row = QWidget()
-        row = QHBoxLayout(self.key_row)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(self.key_edit, 1)
-        row.addWidget(peek)
-        form.addRow("API key", self.key_row)
+        self.key_row = self._wrap(self.key_edit, peek)
         save = QPushButton("保存密钥", objectName="primary")
         save.clicked.connect(self._save_key)
         clear = QPushButton("清除已存密钥")
         clear.clicked.connect(self._clear_key)
-        self.key_buttons = QWidget()
-        buttons = QHBoxLayout(self.key_buttons)
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.addWidget(save)
-        buttons.addWidget(clear)
-        buttons.addStretch()
-        form.addRow("", self.key_buttons)
-        form.addRow("", self._hint("每家的密钥分开存进本机的 Windows 凭据管理器，不写进任何配置文件。"))
+        self.key_buttons = self._wrap(save, clear, stretch_first=False)
+        self.key_buttons.layout().addStretch()
+        entry = QWidget()
+        stack = QVBoxLayout(entry)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(8)
+        stack.addWidget(self.key_row)
+        stack.addWidget(self.key_buttons)
+        self.key_entry = card.add(self._row("API key", entry, "每家的密钥分开存进本机的 Windows 凭据管理器，"
+                                                              "不写进任何配置文件。", below=True))
 
+        card = self._section(column, "模型")
         self.model_box = QComboBox()
         self.model_box.setEditable(True)
         self.model_box.setMaxVisibleItems(20)
         self.model_box.currentTextChanged.connect(self._model_changed)
         test = QPushButton("测试并获取模型列表")
         test.clicked.connect(self._test)
-        row = QHBoxLayout()
-        row.addWidget(self.model_box, 1)
-        row.addWidget(test)
-        form.addRow("模型", row)
         self.check_result = QLabel()
         self.check_result.setWordWrap(True)
-        form.addRow("", self.check_result)
+        tested = QWidget()
+        stack = QVBoxLayout(tested)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(6)
+        stack.addWidget(self._wrap(self.model_box, test))
+        stack.addWidget(self.check_result)
+        card.add(self._row("模型", tested, below=True))
 
-        offline = QCheckBox("离线模式：不连模型，只看黄历和本地起卦，什么都不发出去")
-        offline.setChecked(self.config.offline)
-        offline.toggled.connect(lambda on: self._set("offline", on))
-        form.addRow("", offline)
-        deep = QCheckBox("深度思考：模型先想再答（豆包每次要多等十来秒）")
-        deep.setChecked(self.config.deep_thinking)
-        deep.toggled.connect(lambda on: self._set("deep_thinking", on))
-        form.addRow("", deep)
+        card = self._section(column, "其他")
+        card.add(self._row("离线模式", self._switch(self.config.offline, lambda on: self._set("offline", on)),
+                           "不连模型，只看黄历和本地起卦，什么都不发出去。"))
+        card.add(self._row("深度思考", self._switch(self.config.deep_thinking,
+                                                    lambda on: self._set("deep_thinking", on)),
+                           "模型先想再答，豆包每次要多等十来秒。"))
+        column.addStretch()
         self._fetched: dict[str, list[str]] = {}
         self._refresh_provider()
         return page
@@ -359,7 +479,7 @@ class SettingsWindow(QWidget):
         if self.base_url_label:
             self.base_url_label.setVisible(openai_like)
         self.base_url_edit.setText(self.config.base_url)
-        for widget in (self.key_row, self.key_buttons):
+        for widget in (self.key_row, self.key_buttons, self.key_entry):
             widget.setVisible(preset.needs_key)
 
         self.model_box.blockSignals(True)
@@ -473,112 +593,151 @@ class SettingsWindow(QWidget):
                 self.check_result.setStyleSheet(f"color: {GOOD if ok else BAD};")
 
     # 小瓜 -----------------------------------------------------------------
-    def _slider(self, low, high, value, suffix, name, step=1):
+    def _slider(self, low, high, value, suffix, name, step=1) -> tuple[QSlider, QWidget]:
         slider = QSlider(Qt.Horizontal)
         slider.setRange(low, high)
         slider.setSingleStep(step)
         slider.setValue(value)
         label = QLabel(f"{value}{suffix}")
-        label.setMinimumWidth(52)
+        label.setMinimumWidth(50)
+        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         slider.valueChanged.connect(lambda v: (label.setText(f"{v}{suffix}"), self._set(name, v)))
-        row = QHBoxLayout()
-        row.addWidget(slider, 1)
-        row.addWidget(label)
-        return slider, row
+        box = self._wrap(slider, label)
+        box.setFixedWidth(CONTROL_WIDTH + 40)
+        return slider, box
+
+    def _choice(self, choices, current: str, name: str) -> Segmented:
+        box = Segmented(choices, current)
+        box.currentTextChanged.connect(lambda text: self._set(name, text))
+        return box
 
     def _pet_page(self) -> QWidget:
-        page, form = self._page("小瓜本体", "改动立刻生效。大小也可以在小瓜身上按住 Ctrl 滚滚轮。")
-        self.style_box = QComboBox()
-        self.style_box.addItems(["直白", "平衡", "玄一点"])
-        self.style_box.setCurrentText(self.config.voice_style)
-        self.style_box.currentTextChanged.connect(lambda text: self._set("voice_style", text))
-        form.addRow("说话风格", self.style_box)
-        form.addRow("", self._hint("直白：一句结论加一句为什么，不绕弯。平衡：先给结论，再用大白话说为什么。"
-                                   "玄一点：多一分老黄历的味道和比喻。下一个问题起生效。"))
-        self.proactive_box = QComboBox()
-        self.proactive_box.addItems(["正常", "少", "关"])
-        self.proactive_box.setCurrentText(self.config.proactive)
-        self.proactive_box.currentTextChanged.connect(lambda text: self._set("proactive", text))
-        form.addRow("主动说话", self.proactive_box)
-        form.addRow("", self._hint("正常：每天第一句、计划到期、深夜被叫醒时会冒个泡。"
-                                   "少：只提醒你的计划。关：只在你问的时候说话（你让它定的闹钟照样会响）。"))
-        self.mini_box = QCheckBox("缩成贴边小球（不挡屏幕，有回答时会闪一下）")
-        self.mini_box.setChecked(self.config.mini)
-        self.mini_box.toggled.connect(lambda on: self.mini_requested.emit(on))
-        form.addRow("", self.mini_box)
+        page, column = self._page("小瓜", "它怎么跟你说话、什么时候开口。改动立刻生效。")
+        card = self._section(column, "说话")
+        self.style_box = self._choice(["直白", "平衡", "玄一点"], self.config.voice_style, "voice_style")
+        card.add(self._row("说话风格", self.style_box, "直白：一句结论加一句为什么。平衡：先给结论，再用大白话说为什么。"
+                                                      "玄一点：多一分老黄历的味道。下一个问题起生效。"))
+        self.proactive_box = self._choice(["正常", "少", "关"], self.config.proactive, "proactive")
+        card.add(self._row("主动说话", self.proactive_box, "正常：每天第一句、计划到期、深夜被叫醒时会冒个泡，"
+                                                          "闲着时偶尔随口说两句。少：只提醒你的计划。"
+                                                          "关：只在你问的时候说话（你让它定的闹钟照样会响）。"))
+        self.greet_box = self._switch(self.config.greet_on_start, lambda on: self._set("greet_on_start", on))
+        card.add(self._row("启动时打个招呼", self.greet_box))
+
+        card = self._section(column, "关于你")
         self.zodiac_box = QComboBox()
         self.zodiac_box.addItems([NO_ZODIAC] + list(ZODIAC))
         self.zodiac_box.setCurrentText(self.config.zodiac or NO_ZODIAC)
+        self.zodiac_box.setFixedWidth(120)
         self.zodiac_box.currentTextChanged.connect(
             lambda text: self._set("zodiac", "" if text == NO_ZODIAC else text))
-        form.addRow("你的属相", self.zodiac_box)
-        form.addRow("", self._hint("看黄历时用：今天冲不冲你、哪个时辰对你好。只存在本机；在对话里说「我属虎」也会记住。"))
-        self.size_slider, row = self._slider(100, 400, self.config.pet_size, " px", "pet_size", 10)
-        form.addRow("大小", row)
-        self.opacity_slider, row = self._slider(30, 100, self.config.opacity, " %", "opacity", 5)
-        form.addRow("不透明度", row)
-
-        self.click_through = QCheckBox("鼠标穿透：点击直接穿过小瓜（看视频、打字时不挡操作）")
-        self.click_through.setChecked(self.config.click_through)
-        self.click_through.toggled.connect(lambda on: self._set("click_through", on))
-        form.addRow("", self.click_through)
-        form.addRow("", self._hint("开启后点不到小瓜了：叫小瓜用快捷键，关闭穿透请用右下角托盘图标。"))
-        on_top = QCheckBox("总在最前面")
-        on_top.setChecked(self.config.always_on_top)
-        on_top.toggled.connect(lambda on: self._set("always_on_top", on))
-        form.addRow("", on_top)
-
-        sleep = QSpinBox(suffix=" 分钟", minimum=1, maximum=240, value=self.config.sleep_minutes)
-        sleep.valueChanged.connect(lambda v: self._set("sleep_minutes", v))
-        form.addRow("没动静多久睡觉", sleep)
-        bubble = QSpinBox(suffix=" 秒", minimum=3, maximum=600, value=self.config.bubble_seconds)
-        bubble.valueChanged.connect(lambda v: self._set("bubble_seconds", v))
-        form.addRow("回答后多久回到待机", bubble)
-        greet = QCheckBox("启动时打个招呼")
-        greet.setChecked(self.config.greet_on_start)
-        greet.toggled.connect(lambda on: self._set("greet_on_start", on))
-        form.addRow("", greet)
+        card.add(self._row("你的属相", self.zodiac_box, "看黄历时用：今天冲不冲你、哪个时辰对你好。只存在本机；"
+                                                        "在对话里说「我属虎」也会记住。"))
+        column.addStretch()
         return page
 
+    def _look_page(self) -> QWidget:
+        page, column = self._page("外观", "小瓜和它头顶的气泡长什么样。大小也可以在小瓜身上按住 Ctrl 滚滚轮。")
+        card = self._section(column, "小瓜")
+        self.size_slider, box = self._slider(100, 400, self.config.pet_size, " px", "pet_size", 10)
+        card.add(self._row("大小", box))
+        self.opacity_slider, box = self._slider(30, 100, self.config.opacity, " %", "opacity", 5)
+        card.add(self._row("不透明度", box, "调低一点，小瓜就不那么抢眼。"))
+        self.on_top_box = self._switch(self.config.always_on_top, lambda on: self._set("always_on_top", on))
+        card.add(self._row("总在最前面", self.on_top_box, "关掉后，别的窗口可以盖住小瓜。"))
+        self.mini_box = self._switch(self.config.mini, lambda on: self.mini_requested.emit(on))
+        card.add(self._row("缩成贴边小球", self.mini_box, "不挡屏幕；有回答时小球会闪一下。"))
+
+        card = self._section(column, "气泡")
+        self.bubble_font_box = self._choice(BUBBLE_FONTS, self.config.bubble_font, "bubble_font")
+        card.add(self._row("气泡字号", self.bubble_font_box, "小瓜头顶气泡里的字，看着费劲就调大。"))
+        column.addStretch()
+        return page
+
+    def _play_page(self) -> QWidget:
+        page, column = self._page("互动", "拖它、点它、它闲着的时候。改动立刻生效。")
+        card = self._section(column, "拖动与点击")
+        self.lock_box = self._switch(self.config.lock_position, lambda on: self._set("lock_position", on))
+        card.add(self._row("锁定位置", self.lock_box, "拖不动小瓜，免得不小心挪走；点它照样能问。"
+                                                      "右键小瓜也能开关。"))
+        self.click_through = self._switch(self.config.click_through, lambda on: self._set("click_through", on))
+        card.add(self._row("鼠标穿透", self.click_through, "点击直接穿过小瓜，看视频、打字时不挡操作。"
+                                                           "开启后点不到小瓜了：叫它用快捷键，关掉穿透用右下角托盘图标。"))
+
+        card = self._section(column, "随口说两句")
+        self.chatter_box = self._switch(self.config.chatter, lambda on: self._set("chatter", on))
+        card.add(self._row("闲着时说两句", self.chatter_box, "小瓜待着没事时偶尔冒一句：今天宜什么、哪个时辰好、"
+                                                            "快到的节日，或者叫你喝口水。主动说话选「正常」才说，夜里不说。"))
+        self.chatter_often_box = self._choice(CHATTER_OFTEN, self.config.chatter_often, "chatter_often")
+        card.add(self._row("多久一次", self.chatter_often_box, "偶尔：半小时上下一句。常常：十来分钟一句。"))
+        self.chatter_edit = QPlainTextEdit("\n".join(self.config.chatter_lines))
+        self.chatter_edit.setPlaceholderText("一行一句，比如：\n记得站起来走走\n今天也辛苦啦\n留空就用小瓜自己的话")
+        self.chatter_edit.setFixedHeight(110)
+        self._chatter_timer = QTimer(self, singleShot=True, interval=600)
+        self._chatter_timer.timeout.connect(self._save_chatter_lines)
+        self.chatter_edit.textChanged.connect(self._chatter_timer.start)
+        card.add(self._row("自己写的话", self.chatter_edit, "写了就只说你写的；一行一句。", below=True))
+
+        card = self._section(column, "作息")
+        sleep = QSpinBox(suffix=" 分钟", minimum=1, maximum=240, value=self.config.sleep_minutes)
+        sleep.valueChanged.connect(lambda v: self._set("sleep_minutes", v))
+        sleep.setFixedWidth(120)
+        card.add(self._row("没动静多久睡觉", sleep, "夜里 11 点以后两分钟就睡。"))
+        bubble = QSpinBox(suffix=" 秒", minimum=3, maximum=600, value=self.config.bubble_seconds)
+        bubble.valueChanged.connect(lambda v: self._set("bubble_seconds", v))
+        bubble.setFixedWidth(120)
+        card.add(self._row("回答后多久回到待机", bubble))
+        column.addStretch()
+        return page
+
+    def _save_chatter_lines(self):
+        lines = [line.strip() for line in self.chatter_edit.toPlainText().splitlines() if line.strip()]
+        self._set("chatter_lines", lines[:50])
+
     def sync_from(self, config: cfg.Config):
-        """Reflect changes made elsewhere (Ctrl+wheel, tray) without re-emitting them."""
+        """Reflect changes made elsewhere (Ctrl+wheel, tray, 小瓜's menu) without re-emitting them."""
         for widget, value in ((self.size_slider, config.pet_size), (self.opacity_slider, config.opacity)):
             widget.blockSignals(True)
             widget.setValue(value)
             widget.blockSignals(False)
             widget.valueChanged.emit(value)                 # updates the label; _set is a no-op
-        self.click_through.blockSignals(True)
-        self.click_through.setChecked(config.click_through)
-        self.click_through.blockSignals(False)
+        for box, value in ((self.click_through, config.click_through), (self.mini_box, config.mini),
+                           (self.lock_box, config.lock_position), (self.on_top_box, config.always_on_top)):
+            box.blockSignals(True)
+            box.setChecked(value)
+            box.blockSignals(False)
         self.zodiac_box.blockSignals(True)
         self.zodiac_box.setCurrentText(config.zodiac or NO_ZODIAC)
         self.zodiac_box.blockSignals(False)
-        self.mini_box.blockSignals(True)
-        self.mini_box.setChecked(config.mini)
-        self.mini_box.blockSignals(False)
 
     # 记忆 -----------------------------------------------------------------
     def _memory_page(self) -> QWidget:
-        page, form = self._page("小瓜记得的你", "你在对话里让小瓜记下的事：称呼、偏好、带日期的计划。"
-                                "只存在本机；属相在「小瓜」页改。")
+        page, column = self._page("小瓜记得的你", "你在对话里让小瓜记下的事：称呼、偏好、带日期的计划。"
+                                  "只存在本机；属相在「小瓜」页改。")
         self.memory_stats = self._hint("")
-        form.addRow(self.memory_stats)
+        column.addSpacing(6)
+        column.addWidget(self.memory_stats)
+        card = self._section(column)
         self.memory_list = QListWidget(objectName="memory")
-        self.memory_list.setMinimumHeight(230)
+        self.memory_list.setMinimumHeight(260)
         self.memory_list.setSelectionMode(QListWidget.ExtendedSelection)
-        form.addRow(self.memory_list)
         forget = QPushButton("删掉选中的")
         forget.clicked.connect(self._forget_selected)
         self.forget_all_button = QPushButton("全部忘掉")
         self.forget_all_button.clicked.connect(self._forget_all)
-        row = QHBoxLayout()
-        row.addWidget(forget)
-        row.addWidget(self.forget_all_button)
-        row.addStretch()
-        form.addRow(row)
+        buttons = self._wrap(forget, self.forget_all_button, stretch_first=False)
+        buttons.layout().addStretch()
+        stack = QWidget()
+        lines = QVBoxLayout(stack)
+        lines.setContentsMargins(0, 0, 0, 0)
+        lines.setSpacing(8)
+        lines.addWidget(self.memory_list)
+        lines.addWidget(buttons)
         self.memory_status = self._hint("在对话里说「叫我老王」「我周五面试」，小瓜就会记下；"
                                         "到了那天早上提醒你，过了会问一句结果。")
-        form.addRow(self.memory_status)
+        lines.addWidget(self.memory_status)
+        card.add(self._row("", stack, below=True))
+        column.addStretch()
         return page
 
     def set_memory(self, memory, stats=None):
@@ -630,26 +789,31 @@ class SettingsWindow(QWidget):
 
     # 回收站 ----------------------------------------------------------------
     def _trash_page(self) -> QWidget:
-        page, form = self._page("回收站", "删掉的对话和「小瓜记得的你」里删掉的条目，在这里放 30 天，"
-                                "到期自动彻底删除。小瓜删的时候就已经忘掉了；对话里你说过的原话也存在这里，"
-                                "想马上清掉就点「彻底删除」。")
+        page, column = self._page("回收站", "删掉的对话和「小瓜记得的你」里删掉的条目，在这里放 30 天，"
+                                  "到期自动彻底删除。小瓜删的时候就已经忘掉了；对话里你说过的原话也存在这里，"
+                                  "想马上清掉就点「彻底删除」。")
+        card = self._section(column)
         self.trash_list = QListWidget(objectName="memory")
         self.trash_list.setMinimumHeight(260)
         self.trash_list.setSelectionMode(QListWidget.ExtendedSelection)
-        form.addRow(self.trash_list)
         restore = QPushButton("恢复选中的")
         restore.clicked.connect(self._restore_selected)
         drop = QPushButton("彻底删除选中的")
         drop.clicked.connect(self._drop_selected)
         self.empty_trash_button = QPushButton("清空回收站")
         self.empty_trash_button.clicked.connect(self._empty_trash)
-        row = QHBoxLayout()
-        for button in (restore, drop, self.empty_trash_button):
-            row.addWidget(button)
-        row.addStretch()
-        form.addRow(row)
+        buttons = self._wrap(restore, drop, self.empty_trash_button, stretch_first=False)
+        buttons.layout().addStretch()
+        stack = QWidget()
+        lines = QVBoxLayout(stack)
+        lines.setContentsMargins(0, 0, 0, 0)
+        lines.setSpacing(8)
+        lines.addWidget(self.trash_list)
+        lines.addWidget(buttons)
         self.trash_status = self._hint("对话恢复后回到对话列表；单条消息删了不进回收站。")
-        form.addRow(self.trash_status)
+        lines.addWidget(self.trash_status)
+        card.add(self._row("", stack, below=True))
+        column.addStretch()
         return page
 
     def set_trash(self, trash):
@@ -704,27 +868,25 @@ class SettingsWindow(QWidget):
 
     # 快捷键与启动 ----------------------------------------------------------
     def _start_page(self) -> QWidget:
-        page, form = self._page("快捷键与启动", "快捷键全局有效，在别的窗口里也能按。")
+        page, column = self._page("快捷键与启动", "快捷键全局有效，在别的窗口里也能按。")
+        card = self._section(column, "快捷键")
         self.hotkey_button = HotkeyButton(self.config.hotkey)
         self.hotkey_button.recorded.connect(lambda combo: self._set("hotkey", combo))
-        form.addRow("叫出小瓜", self.hotkey_button)
-        form.addRow("", self._hint("按一下，小瓜头顶冒出输入框，打字回车就问，回答也冒在气泡里；"
-                                   "再按一下收起；单击小瓜也一样。完整对话：右键小瓜 →「打开对话」。"))
+        card.add(self._row("叫出小瓜", self.hotkey_button, "按一下，小瓜头顶冒出输入框，打字回车就问，回答也冒在气泡里；"
+                                                           "再按一下收起；单击小瓜也一样。完整对话：右键小瓜 →「打开对话」。"))
         self.voice_button = HotkeyButton(self.config.voice_hotkey)
         self.voice_button.recorded.connect(lambda combo: self._set("voice_hotkey", combo))
-        form.addRow("按键说话", self.voice_button)
-        form.addRow("", self._hint("按一下开始说（用 Windows 自带的语音输入，第一次要在系统里允许麦克风），"
-                                   "说完再按一下就发给小瓜，回答冒在气泡里；对话框开着时就在对话框里。"
-                                   "小瓜回答时按它会先打断。"))
+        card.add(self._row("按键说话", self.voice_button, "按一下开始说（用 Windows 自带的语音输入，第一次要在系统里"
+                                                          "允许麦克风），说完再按一下就发给小瓜。小瓜回答时按它会先打断。"))
         self.hotkey_status = self._hint("点一下按钮，再按新的组合键。")
-        form.addRow("", self.hotkey_status)
+        column.addSpacing(6)
+        column.addWidget(self.hotkey_status)
 
-        self.autostart = QCheckBox("开机自动启动每日一瓜（启动后安静待在桌面上）")
-        self.autostart.setChecked(cfg.autostart_enabled())
-        self.autostart.toggled.connect(self._toggle_autostart)
-        form.addRow("", self.autostart)
+        card = self._section(column, "启动")
+        self.autostart = self._switch(cfg.autostart_enabled(), self._toggle_autostart)
         self.autostart_status = self._hint("")
-        form.addRow("", self.autostart_status)
+        card.add(self._row("开机自动启动", self.autostart, "启动后安静待在桌面上。", note=self.autostart_status))
+        column.addStretch()
         return page
 
     def hotkey_failed(self, message: str):
@@ -750,40 +912,33 @@ class SettingsWindow(QWidget):
 
     # 关于 -----------------------------------------------------------------
     def _about_page(self) -> QWidget:
-        page, form = self._page("关于每日一瓜", "看黄历、问个事的桌面小参谋，陪你的是小瓜。黄历和卦只当参考，拿主意还是你自己。")
-        form.addRow("版本", QLabel(meihua.__version__))
+        page, column = self._page("关于每日一瓜", "看黄历、问个事的桌面小参谋，陪你的是小瓜。黄历和卦只当参考，"
+                                  "拿主意还是你自己。")
+        card = self._section(column, "这台电脑上的小瓜")
+        card.add(self._row("版本", QLabel(meihua.__version__)))
         for label, folder in (("配置文件夹", cfg.home()), ("日志文件夹", cfg.log_dir())):
             button = QPushButton("打开")
             button.clicked.connect(lambda _=False, f=folder: QDesktopServices.openUrl(QUrl.fromLocalFile(str(f))))
-            row = QHBoxLayout()
-            path = QLabel(str(folder), objectName="hint")
+            path = self._hint(str(folder))
             path.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            row.addWidget(path, 1)
-            row.addWidget(button)
-            form.addRow(label, row)
-        keep = QCheckBox("保存对话记录（只存文字）")
-        keep.setChecked(self.config.keep_history)
-        keep.toggled.connect(lambda on: self._set("keep_history", on))
-        form.addRow("记录", keep)
+            card.add(self._row(label, button, note=path))
+
+        card = self._section(column, "对话记录")
+        keep = self._switch(self.config.keep_history, lambda on: self._set("keep_history", on))
+        self.history_status = self._hint("小瓜记下聊过的对话，重启后接着聊；关掉就只在内存里记。")
+        card.add(self._row("保存对话记录", keep, "只存文字。", note=self.history_status))
         folder_button = QPushButton("打开记录文件夹")
         folder_button.clicked.connect(lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(str(cfg.history_dir().resolve()))))
         delete_button = QPushButton("删除全部记录")
         delete_button.clicked.connect(self._delete_history)
-        row = QHBoxLayout()
-        row.addWidget(folder_button)
-        row.addWidget(delete_button)
-        row.addStretch()
-        form.addRow("", row)
-        self.history_status = self._hint("小瓜记下聊过的对话，重启后接着聊；关掉就只在内存里记。")
-        form.addRow("", self.history_status)
-        form.addRow("隐私", self._hint("你问的话只发给你选的模型厂商；记录、记忆和密钥都只存在这台电脑上。"))
+        card.add(self._row("记录文件", self._wrap(folder_button, delete_button, stretch_first=False)))
+
+        card = self._section(column, "隐私")
         terms = QPushButton("查看使用协议与隐私说明")
         terms.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(meihua.ROOT / "PRIVACY.txt"))))
-        row = QHBoxLayout()
-        row.addWidget(terms)
-        row.addStretch()
-        form.addRow("", row)
+        card.add(self._row("你的话去了哪", terms, "你问的话只发给你选的模型厂商；记录、记忆和密钥都只存在这台电脑上。"))
+        column.addStretch()
         return page
 
     def _delete_history(self):

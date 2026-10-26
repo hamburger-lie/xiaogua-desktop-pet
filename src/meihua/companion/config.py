@@ -68,6 +68,12 @@ class Config:
     last_greet: str = ""                # the day 小瓜 last said its morning line (YYYY-MM-DD)
     proactive: str = "正常"             # 主动说话: 正常 / 少 / 关 (life.py)
     mini: bool = False                  # 贴边小球 mode
+    lock_position: bool = False         # 锁定位置: 小瓜 cannot be dragged; clicks still work
+    bubble_font: str = "标准"           # 气泡字号: 小 / 标准 / 大
+    chatter: bool = True                # 随口说两句 now and then while idle (only with 主动说话 正常)
+    chatter_often: str = "偶尔"         # 偶尔 / 常常
+    chatter_lines: list[str] = field(default_factory=list)   # the user's own lines; empty: 小瓜's own
+    learnt: list[str] = field(default_factory=list)   # bubble tips done with ("ask", "answer"): not shown again
     voice_hotkey: str = "<ctrl>+<alt>+v"    # 按键说话: once to start Windows voice typing, again to send
     deep_thinking: bool = False         # let models that think first (豆包 Seed…) do so: slower, ~10 s a call
     position: list[int] | None = None   # last top-left, restored on start

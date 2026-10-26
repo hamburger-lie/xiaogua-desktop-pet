@@ -323,6 +323,20 @@ class Session:
                 line += f"明天{'、'.join(tomorrow)}。"
         return line
 
+    def chatter(self, own: list[str] | None = None, now: datetime | None = None) -> str:
+        """随口说两句 (life.chatter_line), with today's facts worked out by code: 宜, the good hours still
+        to come for the user's 属相, the next festival or 节气 within a week."""
+        from . import life
+
+        now = now or _now()
+        page = almanac.day_almanac(now.date(), self.zodiac or None)
+        yi = [i["plain"] for i in page["yi"] if not i.get("funeral")]
+        you = page.get("for_you")
+        hours = you["good_hours"] if you else [f"{h['branch']} {h['range']}" for h in page["hours"] if h["luck"] == "吉"]
+        ahead = [harness.hour_words(h) for h in hours if h.split("-")[-1] > f"{now:%H:%M}"]
+        coming = [((day - now.date()).days, name) for day, name in almanac.upcoming(now.date() + timedelta(days=1), 7)]
+        return life.chatter_line(yi, ahead, coming, now, own)
+
     def recent_daily_messages(self) -> list[dict]:
         """The conversation's earlier Q&A as plain messages, newest kept first within the budget."""
         picked, used = [], 0

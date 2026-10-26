@@ -17,9 +17,9 @@ from datetime import datetime
 PROACTIVE_LEVELS = ("正常", "少", "关")
 # What may make 小瓜 speak up without being asked, per level.
 #   morning: the daily 黄历 line     plan: a plan due today / how a past one went
-#   night: a word when woken late at night
+#   night: a word when woken late at night     chatter: 随口说两句 while idle (dsh-pet's 自言自语)
 _ALLOWED = {
-    "正常": {"morning", "plan", "night"},
+    "正常": {"morning", "plan", "night", "chatter"},
     "少": {"plan"},
     "关": set(),
 }
@@ -57,6 +57,37 @@ def reminder_lines(due: list[tuple[str, str]], now: datetime, limit: int | None 
 
 
 PAT_LINES = ("嘿嘿", "痒～", "再摸要收费了", "瓜瓜开心", "头发要乱了啦", "嗯？")
+
+# 随口说两句: a line now and then while 小瓜 idles, from today's 黄历 or a small kindness.
+CHATTER_EVERY = {"偶尔": (20 * 60_000, 40 * 60_000), "常常": (8 * 60_000, 15 * 60_000)}
+CHATTER_RETRY_MS = 3 * 60_000             # not a good moment (busy, asleep, a bubble up): look again soon
+CARE_LINES = ("喝口水吧，小瓜陪你。", "坐久了，起来伸个懒腰？", "眼睛累了就看看远处～", "今天也辛苦啦。",
+              "慢慢来，不着急。", "有事想问就点我一下。")
+
+
+def chatter_delay(often: str, rng: random.Random | None = None) -> int:
+    return (rng or random).randint(*CHATTER_EVERY.get(often, CHATTER_EVERY["偶尔"]))
+
+
+def chatter_line(yi: list[str], hours_ahead: list[str], coming: list[tuple[int, str]], now: datetime,
+                 own: list[str] | None = None, rng: random.Random | None = None) -> str:
+    """One thing to say. The user's own lines if they wrote any; else today's 宜, a good hour still
+    to come, a festival close by (days to go, name), a meal, or a small kindness."""
+    rng = rng or random
+    if own:
+        return rng.choice(own)
+    options = list(CARE_LINES)
+    if yi:
+        options.append(f"今天宜{'、'.join(yi[:2])}，想做的话就趁今天。")
+    if hours_ahead:
+        options.append(f"{hours_ahead[0]}是今天的好时辰，有要紧事可以放那会儿。")
+    if coming:
+        days, name = coming[0]
+        options.append(f"明天就是{name}啦。" if days == 1 else f"还有 {days} 天就是{name}啦。")
+    minute = now.hour * 60 + now.minute
+    if 11 * 60 + 30 <= minute <= 12 * 60 + 30 or 17 * 60 + 30 <= minute <= 18 * 60 + 30:
+        options.append("到饭点啦，先去吃饭吧。")
+    return rng.choice(options)
 
 
 def allows(level: str, kind: str) -> bool:
