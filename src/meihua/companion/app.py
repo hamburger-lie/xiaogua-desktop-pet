@@ -327,7 +327,7 @@ class Bridge(QObject):
 BUBBLE_WIDTH = 300            # an answer's bubble; short notices keep to NOTE_WIDTH
 NOTE_WIDTH = 260
 BUBBLE_FONT_PX = {"小": 12, "标准": 13, "大": 16}    # 设置 → 外观 → 气泡字号
-BUBBLE_TIPS = {"ask": "Enter 发送 · Esc 收起 · 右键小瓜可打开完整对话",     # shown until done once
+BUBBLE_TIPS = {"ask": "Enter 发送 · Esc 收起 · 右键小瓜可打开完整对话",     # shown the first time only
                "answer": "点气泡看完整对话"}
 BUBBLE_CHARS = 260            # longer answers are cut in the bubble; the chat panel has them whole
 BUBBLE_STREAM_MS = 120        # the streamed answer is redrawn at most this often
@@ -372,7 +372,7 @@ class Bubble(QWidget):
     which has the whole conversation.
     """
     asked = Signal(str)          # the user typed a question into the bubble
-    learnt = Signal(str)         # a first-time tip was acted on ("ask", "answer"): it is not shown again
+    learnt = Signal(str)         # a first-time tip was shown ("ask", "answer"): it is not shown again
 
     def __init__(self, on_click=None):
         from PySide6.QtWidgets import QLineEdit
@@ -551,8 +551,11 @@ class Bubble(QWidget):
                    width=BUBBLE_WIDTH)
 
     def _tip(self, kind: str) -> str:
-        """A how-to line under the box or the answer, until it has been done once: a first-time lesson."""
-        return "" if kind in self.learnt_tips else BUBBLE_TIPS[kind]
+        """A how-to line under the box or the answer, the first time only: a first-time lesson."""
+        if kind in self.learnt_tips:
+            return ""
+        self._learn(kind)                                # shown once is enough
+        return BUBBLE_TIPS[kind]
 
     def _learn(self, kind: str):
         if kind not in self.learnt_tips:
@@ -567,7 +570,6 @@ class Bubble(QWidget):
         self.input.clear()
         self.input.setPlaceholderText("问小瓜…")
         self.asked.emit(text)
-        self._learn("ask")
 
     def eventFilter(self, watched, event):
         if watched is self.input and event.type() == event.Type.KeyPress and event.key() == Qt.Key_Escape:
@@ -618,8 +620,6 @@ class Bubble(QWidget):
         if self.mode == "ask":                           # a click beside the input box: keep typing
             self.input.setFocus()
             return
-        if self.mode == "answer":
-            self._learn("answer")                        # found the whole conversation: no more 「点气泡…」
         self.hide()
         if self.on_click:
             self.on_click()
@@ -664,6 +664,9 @@ class Pet(QWidget):
         self.session.zodiac = self.config.zodiac or None
         if not self.config.first_day:                              # 陪你第 N 天 counts from here
             self.config.first_day = date.today().isoformat()
+            self.config.save()
+        elif not self.config.learnt and self.config.first_day < date.today().isoformat():
+            self.config.learnt = list(BUBBLE_TIPS)                 # used 小瓜 before the tips came: knows them
             self.config.save()
         self.session.first_day = date.fromisoformat(self.config.first_day)
         self.session.memory = Memory(home() / "memory.json")      # 小瓜记得的你, across days
@@ -1585,7 +1588,7 @@ class Pet(QWidget):
         return menu
 
     def _tip_learnt(self, kind: str):
-        """A bubble tip was acted on once: kept, so it is not shown again (after a restart either)."""
+        """A bubble tip was shown once: kept, so it is not shown again (after a restart either)."""
         if kind not in self.config.learnt:
             self.config.learnt = self.config.learnt + [kind]
             self.config.save()

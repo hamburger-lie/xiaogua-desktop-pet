@@ -212,26 +212,35 @@ def test_the_pet_chatters_only_when_idle_and_allowed(pet, monkeypatch):
 
 # ------------------------------------------------------------ first-time tips in the bubble
 
-def test_the_box_tip_shows_until_the_first_question_then_never(pet):
+def test_the_box_tip_shows_the_first_time_only(pet):
     from meihua.companion.config import Config
     pet.bubble.ask(pet.frameGeometry())
     assert pet.bubble.footer.isVisibleTo(pet.bubble) and "Enter 发送" in pet.bubble.footer.text()
-    pet.bubble.input.setText("今天宜什么")
-    pet.bubble.send()
-    pet.bubble.ask(pet.frameGeometry())
+    pet.bubble.hide()
+    pet.bubble.ask(pet.frameGeometry())                    # the second time: just the box
     assert not pet.bubble.footer.isVisibleTo(pet.bubble) and Config.load().learnt == ["ask"]
 
 
-def test_the_answer_tip_goes_once_a_bubble_was_clicked(pet):
-    from PySide6.QtCore import QPointF, Qt
-    from PySide6.QtGui import QMouseEvent
-    from PySide6.QtWidgets import QApplication
+def test_the_answer_tip_shows_on_the_first_answer_only(pet):
     pet.bubble.answer("宜理发。", pet.frameGeometry())
     assert pet.bubble.footer.text() == "点气泡看完整对话"
-    QApplication.sendEvent(pet.bubble, QMouseEvent(QMouseEvent.Type.MouseButtonPress, QPointF(10, 10),
-                                                   QPointF(10, 10), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
-    pet.bubble.answer("宜理发。", pet.frameGeometry())
+    pet.bubble.answer("宜剪头。", pet.frameGeometry())
     assert not pet.bubble.footer.isVisibleTo(pet.bubble) and "answer" in pet.config.learnt
+
+
+@pytest.mark.parametrize("first_day, sees_tips", [("2026-10-01", False), ("", True)])
+def test_who_used_xiaogua_before_the_tips_never_sees_them(qt, monkeypatch, first_day, sees_tips):
+    from meihua.companion import app as companion
+    from meihua.companion.config import Config
+    config = Config.load()
+    config.first_day = first_day
+    config.save()
+    monkeypatch.setattr(companion.threading, "Thread",
+                        lambda target, args, daemon: type("T", (), {"start": lambda self: None})())
+    pet = companion.Pet(companion.OfflineAgent(), "Ctrl+Alt+X")
+    pet.show()
+    pet.bubble.ask(pet.frameGeometry())
+    assert pet.bubble.footer.isVisibleTo(pet.bubble) is sees_tips
 
 
 def test_tips_learnt_before_stay_away_after_a_restart(pet):
