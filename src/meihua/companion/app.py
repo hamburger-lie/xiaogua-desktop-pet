@@ -343,9 +343,21 @@ def bubble_text(text: str, limit: int = BUBBLE_CHARS) -> str:
     return head.rstrip() + "……\n\n*（点这个气泡看完整回答）*"
 
 
+READ_CHARS_PER_S = 5          # a bubble is read at about five characters a second …
+READ_NOTICE_S = 2             # … after a moment to notice it
+READ_MAX_S = 60
+
+
+def read_seconds(text: str, least: int = 0) -> int:
+    """How long a bubble stays: time to notice and read what it shows, at least `least`, at most
+    a minute. The mouse on the bubble holds it longer (Bubble.enterEvent)."""
+    chars = len(re.sub(r"\s|\*", "", text))
+    return max(least, min(READ_MAX_S, READ_NOTICE_S + math.ceil(chars / READ_CHARS_PER_S)))
+
+
 def answer_seconds(text: str) -> int:
-    """How long an answer stays over 小瓜's head: time to read it, 12 s to a minute."""
-    return max(12, min(60, len(text) // 5))
+    """How long an answer stays over 小瓜's head: time to read what the bubble shows of it, 12 s at least."""
+    return read_seconds(bubble_text(text), 12)
 
 
 class Bubble(QWidget):
@@ -463,8 +475,8 @@ class Bubble(QWidget):
             self.hide_timer.start(seconds * 1000)
 
     def say(self, text: str, pet_geometry, seconds: int = 8):
-        """A short notice; it goes away by itself."""
-        self._show("note", text, pet_geometry, seconds)
+        """A short notice; it goes away by itself after `seconds`, or later when it takes longer to read."""
+        self._show("note", text, pet_geometry, read_seconds(text, seconds))
 
     def ask(self, pet_geometry, text: str = ""):
         """Turn into a small input box (with an optional line above it, like today's 黄历)."""
@@ -1338,7 +1350,8 @@ class Pet(QWidget):
     def check_reminders(self, now: datetime | None = None) -> list[str]:
         """到点提醒: plans the user asked to be reminded of, at their minute. Given whatever 主动说话 is
         set to and at night too (the user asked for them); held back while 小瓜 is answering or dragged.
-        Said in a bubble with a wave, kept in the conversation, and on the tray when 小瓜 is out of sight."""
+        Said in a bubble with a wave, kept in the conversation, and on the tray when 小瓜 is out of sight.
+        Ones missed while 小瓜 was closed or the computer asleep come in one line (life.reminder_lines)."""
         memory = self.session.memory
         if memory is None or self.busy or self._dragging:
             return []
@@ -1347,9 +1360,11 @@ class Pet(QWidget):
         if not due:
             return []
         memory.mark_reminded(due)
-        lines = [life.reminder_text(f.text, f.time, now) for f in due]
-        text = "\n".join(lines)
-        self.chat.add_notice(text, self.session.log_message("xiaogua", text))
+        due = [(f.text, f.time) for f in due]
+        lines = life.reminder_lines(due, now)
+        whole = "\n\n".join(lines)                       # markdown: a single newline would run the lines together
+        self.chat.add_notice(whole, self.session.log_message("xiaogua", whole))
+        text = "\n\n".join(life.reminder_lines(due, now, life.MISSED_SHOWN))   # the bubble and the tray
         self.memory_changed.emit()
         if self.state == "睡着":
             self.play("起床", "招手", "待机")

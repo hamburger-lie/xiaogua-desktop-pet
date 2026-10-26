@@ -126,7 +126,23 @@ def test_long_answers_are_cut_in_the_bubble_but_whole_in_the_chat():
     shown = companion.bubble_text(long)
     assert len(shown) < len(long) and "点这个气泡看完整回答" in shown and shown.split("……")[0].endswith("。")
     assert companion.bubble_text("短的。") == "短的。"
-    assert companion.answer_seconds("短") == 12 and companion.answer_seconds(long) == 60
+    assert companion.answer_seconds("短") == 12
+    assert companion.answer_seconds(long) == companion.read_seconds(shown, 12) < 60   # what the bubble shows
+
+
+def test_a_bubble_stays_as_long_as_it_takes_to_read():
+    assert companion.read_seconds("嘿嘿", 2) == 3                    # a moment to notice, then the words
+    assert companion.read_seconds("今天宜理发。" * 5, 8) == 8          # 30 characters: the caller's 8 s is enough
+    assert companion.read_seconds("今天宜理发。" * 10, 8) == 14        # 60 characters: twelve seconds to read
+    assert companion.read_seconds("**Ctrl+Alt+X**") == 4               # markdown marks are not read
+    assert companion.read_seconds("字" * 1000) == 60
+
+
+def test_a_long_notice_is_not_cut_short(pet):
+    pet.bubble.say("今天宜理发。" * 15, pet.frameGeometry(), 8)
+    assert pet.bubble.hide_timer.interval() == 20_000
+    pet.bubble.say("好。", pet.frameGeometry(), 8)
+    assert pet.bubble.hide_timer.interval() == 8_000
 
 
 def test_patting_does_not_cover_an_answer_or_the_box(pet):

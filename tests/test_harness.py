@@ -8,7 +8,7 @@ import pytest
 
 from meihua.companion import harness
 from meihua.companion.agent import XiaoguaAgent
-from meihua.companion.session import Session, answer_facts
+from meihua.companion.session import Session, answer_facts, daily_context_text
 
 from test_companion_agent import ScriptedClient, text  # noqa: E402
 
@@ -205,3 +205,62 @@ def test_a_runaway_answer_is_sent_back(tmp_path):
                              [text("今天适合出门，下午最好。\n〔开心〕")]])
     reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("今天出去玩好吗")
     assert reply.text == "今天适合出门，下午最好。" and reply.checks[0].startswith("退回:太长")
+
+
+# --- festivals ------------------------------------------------------------------
+
+EVE_OF_HALLOWEEN = datetime(2026, 10, 30, 9, 0).astimezone()      # 万圣夜 tomorrow, 立冬 in eight days
+
+
+@pytest.mark.parametrize("sentence", ["今天是重阳节，适合登高。", "今天立冬了。", "后天是万圣夜。", "今晚是平安夜",
+                                      "明天是中秋。"])
+def test_a_wrong_festival_for_the_day_is_caught(sentence):
+    assert harness.wrong_occasions(sentence, answer_facts(None, EVE_OF_HALLOWEEN))
+
+
+@pytest.mark.parametrize("sentence", ["明天就是万圣夜啦。", "明晚是万圣夜。", "明天万圣节前夜，出去玩吧。"])
+def test_the_right_festival_passes(sentence):
+    assert harness.wrong_occasions(sentence, answer_facts(None, EVE_OF_HALLOWEEN)) == []
+
+
+@pytest.mark.parametrize("sentence", ["今天是中秋节前一天。", "大后天是万圣夜。", "今天不是中秋。", "今天离春节还远。",
+                                      "明天国庆假期结束。", "今天是春节后第一天上班。", "中秋那天适合搬家。"])
+def test_what_is_not_a_claim_about_that_day_is_not_checked(sentence):
+    assert harness.wrong_occasions(sentence, answer_facts(None, EVE_OF_HALLOWEEN)) == []
+
+
+def test_both_xiaonian_days_are_xiaonian():
+    north = answer_facts(None, datetime(2026, 2, 10, 9, 0).astimezone())
+    south = answer_facts(None, datetime(2026, 2, 11, 9, 0).astimezone())
+    assert harness.wrong_occasions("今天小年。", north) == harness.wrong_occasions("今天小年。", south) == []
+    assert harness.wrong_occasions("明天除夕。", north) == ["明天除夕"]          # 除夕 is the 16th
+
+
+def unused_festival(facts: harness.Facts) -> str:
+    named = {n for names in facts.occasions.values() for n in names}
+    return next(f for f in ("重阳节", "中秋节", "端午节") if f not in named)
+
+
+def test_a_wrong_festival_goes_back_once(tmp_path):
+    wrong = unused_festival(answer_facts(None))
+    client = ScriptedClient([[text(f"今天是{wrong}，适合出门走走。\n〔开心〕")],
+                             [text("今天适合出门走走。\n〔开心〕")]])
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("今天出去玩好吗")
+    assert reply.text == "今天适合出门走走。" and reply.checks[0] == f"退回:节日「今天是{wrong}」"
+    sent_back = client.requests[1]["messages"][-1]["content"][0]["text"]
+    assert "对不上" in sent_back and "今天：" in sent_back and "明天：" in sent_back
+
+
+def test_still_wrong_after_the_redo_the_sentence_is_taken_out(tmp_path):
+    wrong = unused_festival(answer_facts(None))
+    said = f"今天是{wrong}。适合出门走走。\n〔开心〕"
+    client = ScriptedClient([[text(said)], [text(said)]])
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("今天出去玩好吗")
+    assert reply.text == "适合出门走走。" and "删掉说错的节日" in reply.checks
+    assert len(client.requests) == 2
+
+
+def test_the_context_names_the_festivals_ahead():
+    text = daily_context_text(None, EVE_OF_HALLOWEEN)
+    assert "接下来 7 天的节日节气：10月31日（周六）万圣夜。" in text
+    assert "今天是国庆节" in daily_context_text(None, datetime(2026, 10, 1, 9, 0).astimezone())

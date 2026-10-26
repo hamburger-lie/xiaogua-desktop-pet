@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""黄历: one day's 宜忌, 冲煞, 值神 and 时辰, and how the day sits with a 属相.
+"""黄历: one day's 宜忌, 冲煞, 值神, 时辰 and 节日, and how the day sits with a 属相.
 
 The calendar facts come from lunar_python (6tail's 寿星万年历, MIT; 宜忌 per
 《协纪辨方书》). This module only selects, translates and relates them, so the
@@ -77,6 +77,26 @@ ACTIVITIES = {
 }
 APPROXIMATE = {"面试": "见贵", "上线": "开市", "相亲": "会亲友"}   # no traditional term of its own
 
+# 节日 小瓜 mentions: a whitelist, not lunar_python's lists (those carry political anniversaries,
+# awareness days and religious dates as well). Folk, family and well-known foreign festivals only.
+# 小年 differs by region, so both days are named for theirs. lunar_python only does the calendar.
+SOLAR_FESTIVALS = {(1, 1): "元旦", (2, 14): "情人节", (3, 8): "妇女节", (4, 1): "愚人节", (5, 1): "劳动节",
+                   (6, 1): "儿童节", (9, 10): "教师节", (10, 1): "国庆节", (10, 31): "万圣夜",
+                   (12, 24): "平安夜", (12, 25): "圣诞节"}
+NTH_SUNDAY_FESTIVALS = {(5, 2): "母亲节", (6, 3): "父亲节"}       # (month, n): the n-th Sunday
+LUNAR_FESTIVALS = {(1, 1): "春节", (1, 15): "元宵节", (2, 2): "龙抬头", (5, 5): "端午节", (7, 7): "七夕",
+                   (7, 15): "中元节", (8, 15): "中秋节", (9, 9): "重阳节", (12, 8): "腊八节",
+                   (12, 23): "北方小年", (12, 24): "南方小年"}             # 除夕: the eve of 春节
+SOLAR_TERMS = ("小寒", "大寒", "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至",
+               "小暑", "大暑", "立秋", "处暑", "白露", "秋分", "寒露", "霜降", "立冬", "小雪", "大雪", "冬至")
+# How a festival may be said: the word -> the festivals it can mean. Words not here are never checked.
+OCCASION_WORDS = {name: (name,) for name in (*SOLAR_FESTIVALS.values(), *NTH_SUNDAY_FESTIVALS.values(),
+                                             *LUNAR_FESTIVALS.values(), "除夕", *SOLAR_TERMS)}
+OCCASION_WORDS.update({"元宵": ("元宵节",), "端午": ("端午节",), "七夕节": ("七夕",), "中元": ("中元节",),
+                       "鬼节": ("中元节",), "中秋": ("中秋节",), "重阳": ("重阳节",), "腊八": ("腊八节",),
+                       "小年": ("北方小年", "南方小年"), "大年三十": ("除夕",), "年三十": ("除夕",),
+                       "大年初一": ("春节",), "国庆": ("国庆节",), "圣诞": ("圣诞节",), "万圣节前夜": ("万圣夜",)})
+
 
 def zodiac_branch(zodiac: str) -> str:
     zodiac = zodiac.strip().removeprefix("属")
@@ -142,6 +162,34 @@ def _lunar(day: date):
     return Solar.fromYmdHms(day.year, day.month, day.day, 12, 0, 0).getLunar()
 
 
+def festivals(day: date) -> list[str]:
+    """The whitelisted festivals on `day`, 农历 ones first."""
+    lunar, found = _lunar(day), []
+    if lunar.getMonth() > 0:                                       # a leap month repeats no festival
+        name = LUNAR_FESTIVALS.get((lunar.getMonth(), lunar.getDay()))
+        found += [name] if name else []
+    following = _lunar(day + timedelta(days=1))
+    if (following.getMonth(), following.getDay()) == (1, 1):
+        found.append("除夕")                                       # 腊月廿九 or 三十
+    name = SOLAR_FESTIVALS.get((day.month, day.day))
+    found += [name] if name else []
+    if day.weekday() == 6:
+        name = NTH_SUNDAY_FESTIVALS.get((day.month, (day.day - 1) // 7 + 1))
+        found += [name] if name else []
+    return found
+
+
+def occasions(day: date) -> list[str]:
+    """Festivals and the 节气 on `day`: 「中秋节」「国庆节」「寒露」."""
+    term = _lunar(day).getJieQi()
+    return festivals(day) + ([term] if term in SOLAR_TERMS else [])
+
+
+def upcoming(start: date, days: int) -> list[tuple[date, str]]:
+    """Festivals and 节气 in [start, start+days), in order."""
+    return [(day, name) for day in (start + timedelta(days=i) for i in range(days)) for name in occasions(day)]
+
+
 def day_almanac(day: date, zodiac: str | None = None) -> dict:
     """The 黄历 page for `day`; with a 属相, how the day and its hours sit with it."""
     lunar = _lunar(day)
@@ -155,6 +203,7 @@ def day_almanac(day: date, zodiac: str | None = None) -> dict:
                    "day": lunar.getDayInGanZhi()},
         "solar_term": lunar.getJieQi() or None,
         "after_term": lunar.getPrevJieQi().getName(),
+        "festivals": festivals(day),
         "yi": _plain(yi),
         "ji": _plain(ji),
         "clash": {"zodiac": lunar.getDayChongShengXiao(), "desc": f"冲{lunar.getDayChongShengXiao()}",
@@ -214,6 +263,9 @@ def pick_days(activity: str, start: date, days: int = 30, zodiac: str | None = N
         entry = {"date": day.isoformat(), "weekday": "星期" + WEEKDAYS[day.weekday()],
                  "lunar": f"{lunar.getMonthInChinese()}月{lunar.getDayInChinese()}",
                  "day_god_luck": lunar.getDayTianShenLuck(), "clash": "冲" + lunar.getDayChongShengXiao()}
+        named = occasions(day)
+        if named:
+            entry["occasions"] = named
         if mine:
             rel = relations(mine, lunar.getDayZhi())
             entry["for_you"] = tone(rel)

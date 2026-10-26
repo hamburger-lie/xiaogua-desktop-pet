@@ -42,6 +42,16 @@ def _weeks(today: date) -> str:
     return f"这周是{span(monday)}，下周是{span(monday + timedelta(days=7))}。"
 
 
+AHEAD_DAYS = 7                           # festivals and 节气 the model is told about, after today
+
+
+def _coming(today: date) -> str:
+    """「接下来 7 天的节日节气：10月31日（周六）万圣夜；11月7日（周六）立冬。」"""
+    found = almanac.upcoming(today + timedelta(days=1), AHEAD_DAYS)
+    days = "；".join(f"{d.month}月{d.day}日（周{WEEKDAY[d.weekday()]}）{name}" for d, name in found)
+    return f"接下来 {AHEAD_DAYS} 天的节日节气：{days or '没有'}。"
+
+
 def daily_context_text(zodiac: str | None, now: datetime | None = None) -> str:
     """【今天】and【用户】: today's 黄历 worked out by code, not by the model."""
     now = now or _now()
@@ -49,12 +59,14 @@ def daily_context_text(zodiac: str | None, now: datetime | None = None) -> str:
     god = page["day_god"]
     lines = [f"【今天】{now.date().isoformat()} 星期{WEEKDAY[now.weekday()]} {now:%H:%M}，"
              f"农历{page['lunar']}，{page['ganzhi']['day']}日（{god['name']}{god['kind']}，{page['officer']}）"
+             + (f"，今天是{'、'.join(page['festivals'])}" if page["festivals"] else "")
              + (f"，今天交{page['solar_term']}" if page["solar_term"] else ""),
              f"宜：{almanac.plain_text(page['yi'])}",
              f"忌：{almanac.plain_text(page['ji'])}",
              f"{page['clash']['desc']}，煞{page['clash']['sha_direction']}。"
              f"财神{page['directions']['财神']}，喜神{page['directions']['喜神']}。",
-             _weeks(now.date())]
+             _weeks(now.date()),
+             _coming(now.date())]
     you = page.get("for_you")
     if you:
         relation = "、".join(you["day_relations"]) or "无冲无合"
@@ -72,10 +84,14 @@ def daily_context_text(zodiac: str | None, now: datetime | None = None) -> str:
 
 
 def answer_facts(zodiac: str | None, now: datetime | None = None) -> harness.Facts:
-    """What an answer is checked against before it is shown: today's good 时辰 for the user."""
+    """What an answer is checked against before it is shown: today's good 时辰 for the user, and the
+    festivals and 节气 of today, tomorrow and the day after."""
     now = now or _now()
     facts = harness.Facts(today=now.date(), now=now)
     facts.add_page(almanac.day_almanac(now.date(), zodiac or None))
+    facts.occasions = {label: almanac.occasions(now.date() + timedelta(days=i))
+                       for i, label in enumerate(harness.OCCASION_DAYS)}
+    facts.occasion_words = almanac.OCCASION_WORDS
     return facts
 
 
@@ -87,6 +103,16 @@ ZODIAC_SCHEMA = {"name": "remember_zodiac",
 # How a day sits with the user's 属相, in the morning greeting's words.
 TONE_WORDS = {"冲": "相冲，大事缓缓", "不顺": "有点别扭，说话办事留一手", "合中带刑": "有助力也有小别扭",
               "合中带害": "有助力也有小别扭", "顺": "相合，适合往前推", "平": "不冲不合"}
+
+# A line said on the day, after 「今天中秋节。」. Old poems and folk sayings only (public domain):
+# 王安石《元日》, 辛弃疾《青玉案·元夕》, 杜牧《清明》, 文秀《端午》, 秦观《鹊桥仙》, 苏轼《水调歌头》,
+# 王维《九月九日忆山东兄弟》, 杜甫《小至》; 腊八 and 小年 are sayings. None for 中元 (a day to remember
+# the dead, not to be made pretty) or for the modern festivals.
+OCCASION_LINES = {"春节": "爆竹声中一岁除，春风送暖入屠苏。", "元宵节": "东风夜放花千树。",
+                  "清明": "清明时节雨纷纷。", "端午节": "节分端午自谁言，万古传闻为屈原。",
+                  "七夕": "金风玉露一相逢，便胜却人间无数。", "中秋节": "但愿人长久，千里共婵娟。",
+                  "重阳节": "遥知兄弟登高处，遍插茱萸少一人。", "冬至": "天时人事日相催，冬至阳生春又来。",
+                  "腊八节": "过了腊八就是年。", "北方小年": "二十三，糖瓜粘。"}
 
 
 def daily_tool_schemas() -> list[dict[str, Any]]:
@@ -251,7 +277,8 @@ class Session:
         """The first thing 小瓜 says on a new day, made by code (no model, no wait).
 
         A plan for today comes first, then one past plan to ask about (asked once),
-        else today's 黄历 for the user's 属相. A 节气 today or tomorrow is mentioned.
+        else today's 黄历 for the user's 属相. A festival or 节气 today is said first (with an old line
+        for the big ones); else one tomorrow is mentioned at the end.
         """
         now = now or _now()
         today = now.date()
@@ -286,12 +313,14 @@ class Session:
                 line += fit + (f"，{hour}好" if hour else "") + "。"
             else:
                 line += "告诉我你属什么，帮你看今天跟你合不合。"
-        if page["solar_term"]:
-            line = f"今天{page['solar_term']}。" + line
+        named = almanac.occasions(today)
+        if named:
+            poem = next((OCCASION_LINES[n] for n in named if n in OCCASION_LINES), "")
+            line = f"今天{'、'.join(named)}。{poem}" + line.removeprefix("今天")
         else:
-            tomorrow = almanac.day_almanac(today + timedelta(days=1))["solar_term"]
+            tomorrow = almanac.occasions(today + timedelta(days=1))
             if tomorrow:
-                line += f"明天{tomorrow}。"
+                line += f"明天{'、'.join(tomorrow)}。"
         return line
 
     def recent_daily_messages(self) -> list[dict]:

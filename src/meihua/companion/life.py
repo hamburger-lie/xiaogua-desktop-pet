@@ -30,11 +30,30 @@ FIDGET_MS = (60_000, 150_000)            # an idle fidget every one to two and a
 FIDGETS = (("点头", 3), ("歪头", 3), ("招手", 1))
 
 
-def reminder_text(text: str, at: str, now: datetime) -> str:
-    """「到点啦：交报告（15:00）」, or, when 小瓜 was not running then, that it is late."""
-    hour, minute = int(at[:2]), int(at[3:])
-    late = (now.hour * 60 + now.minute) - (hour * 60 + minute) > 5
-    return f"刚才 {at} 的事：{text}（那会儿小瓜没开着）" if late else f"到点啦：{text}（{at}）"
+REMIND_GRACE_MIN = 10        # a reminder this late is still 「到点啦」 …
+MISSED_SHOWN = 3              # … later ones go in one line; the bubble names this many of them
+
+
+def reminder_lines(due: list[tuple[str, str]], now: datetime, limit: int | None = None) -> list[str]:
+    """What 小瓜 says for reminders whose minute has come, (text, 「15:00」) each.
+
+    On time (or up to REMIND_GRACE_MIN late): 「到点啦：交报告（15:00）」 for each. Missed by more
+    (小瓜 was closed, the computer asleep): all in one line, so coming back to several does not fill
+    the screen; `limit` names only the first few (the bubble), None names them all (the chat)."""
+    minute = now.hour * 60 + now.minute
+    lines, missed = [], []
+    for text, at in due:
+        if minute - (int(at[:2]) * 60 + int(at[3:])) <= REMIND_GRACE_MIN:
+            lines.append(f"到点啦：{text}（{at}）")
+        else:
+            missed.append((text, at))
+    if len(missed) == 1:
+        lines.append(f"错过了 {missed[0][1]} 的提醒：{missed[0][0]}。")
+    elif missed:
+        named = missed if limit is None else missed[:limit]
+        more = "…（完整的在对话里）" if len(named) < len(missed) else "。"
+        lines.append(f"错过了 {len(missed)} 个提醒：{'、'.join(f'{at} {t}' for t, at in named)}{more}")
+    return lines
 
 
 PAT_LINES = ("嘿嘿", "痒～", "再摸要收费了", "瓜瓜开心", "头发要乱了啦", "嗯？")

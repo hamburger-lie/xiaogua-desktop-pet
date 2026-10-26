@@ -62,9 +62,23 @@ def test_old_memory_files_still_load(tmp_path):
     assert Memory(path).facts[0] == Fact("m1", "计划", "搬家", "2026-10-01", "2026-10-11")
 
 
-def test_what_xiaogua_says_on_time_and_when_late():
-    assert life.reminder_text("交报告", "15:00", datetime(2026, 10, 9, 15, 0)) == "到点啦：交报告（15:00）"
-    assert "没开着" in life.reminder_text("交报告", "15:00", datetime(2026, 10, 9, 15, 30))
+def test_what_xiaogua_says_on_time_and_a_little_late():
+    assert life.reminder_lines([("交报告", "15:00")], datetime(2026, 10, 9, 15, 0)) == ["到点啦：交报告（15:00）"]
+    assert life.reminder_lines([("交报告", "15:00")], datetime(2026, 10, 9, 15, 10)) == ["到点啦：交报告（15:00）"]
+    assert life.reminder_lines([("交报告", "15:00")], datetime(2026, 10, 9, 15, 11)) == ["错过了 15:00 的提醒：交报告。"]
+
+
+MISSED = [("喝水", "09:00"), ("交报告", "10:30"), ("开会", "11:00"), ("取快递", "12:00"), ("打电话", "13:00")]
+
+
+def test_missed_reminders_come_in_one_line_and_the_bubble_names_a_few():
+    at_two = datetime(2026, 10, 9, 14, 0)
+    whole = life.reminder_lines(MISSED + [("拿药", "13:55")], at_two)
+    assert whole == ["到点啦：拿药（13:55）",
+                     "错过了 5 个提醒：09:00 喝水、10:30 交报告、11:00 开会、12:00 取快递、13:00 打电话。"]
+    short = life.reminder_lines(MISSED, at_two, life.MISSED_SHOWN)
+    assert short == ["错过了 5 个提醒：09:00 喝水、10:30 交报告、11:00 开会…（完整的在对话里）"]
+    assert life.reminder_lines(MISSED[:2], at_two, life.MISSED_SHOWN) == ["错过了 2 个提醒：09:00 喝水、10:30 交报告。"]
 
 
 @pytest.mark.parametrize("answer", ["好，15:00 叫你。", "行，下午三点叫你交报告。", "到 3点 我喊你。", "十五点叫你"])
@@ -116,6 +130,25 @@ def test_the_pet_waves_and_says_it_at_the_minute(pet):
     assert pet.state == "招手" and heard == ["到点啦：交报告（15:00）"]
     assert any(m["text"] == "到点啦：交报告（15:00）" for m in pet.session.chat.messages)    # kept in the chat
     assert pet.check_reminders(datetime(2026, 10, 9, 15, 1)) == []                     # once
+
+
+def test_coming_back_to_missed_reminders_is_one_bubble_and_one_notice(pet):
+    memory = pet.session.memory
+    for text, at in MISSED:
+        memory.add("计划", text, None, TODAY, at=at, now=datetime(2026, 10, 9, 8, 0))
+    heard = []
+    pet.reminded.connect(heard.append)
+    lines = pet.check_reminders(datetime(2026, 10, 9, 14, 0))      # the computer slept all morning
+    assert len(lines) == 1 and lines[0].startswith("错过了 5 个提醒：") and "13:00 打电话" in lines[0]
+    assert heard == [pet.bubble.label.text()] and "完整的在对话里" in heard[0] and "打电话" not in heard[0]
+    notices = [m["text"] for m in pet.session.chat.messages if "错过了" in m["text"]]
+    assert notices == lines                                        # the chat has them all
+    memory.add("计划", "拿药", None, TODAY, at="14:05", now=datetime(2026, 10, 9, 14, 0))
+    memory.add("计划", "出门", None, TODAY, at="14:05", now=datetime(2026, 10, 9, 14, 0))
+    pet.check_reminders(datetime(2026, 10, 9, 14, 5))
+    assert pet.bubble.label.text() == "到点啦：拿药（14:05）\n\n到点啦：出门（14:05）"     # a paragraph each
+    assert pet.check_reminders(datetime(2026, 10, 9, 14, 1)) == []  # given once
+    assert all(f.reminded for f in memory.facts)
 
 
 def test_the_pet_waits_while_it_is_answering(pet):

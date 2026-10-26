@@ -8,9 +8,10 @@ place every answer passes (agent.ask, after the evidence gate):
            markdown, stock phrases, words that say too much (必然、注定), evidence ids.
            Applied silently, no extra wait. The chat window applies them to the
            streamed draft too, so a dash never flashes on screen.
-  facts    claims code can check against what it worked out itself. Now: 好时辰.
-           A wrong one is sent back to the model once, with the right hours; if it
-           is still wrong, code takes the sentence out and says the hours itself.
+  facts    claims code can check against what it worked out itself. Now: 好时辰, and
+           「今天是 / 明天是」 a festival or 节气. A wrong one is sent back to the model
+           once, with the right facts; if it is still wrong, code takes the sentence
+           out (and says the hours itself).
   casts    a hexagram named in the answer must be one that was cast: this turn's tools or the
            talk so far. One the model made up goes back once; still there, the
            sentences with it are taken out.
@@ -128,6 +129,8 @@ class Facts:
     question: str = ""                 # the user's words: is it a 能不能 question?
     max_chars: int = 0                 # longest answer sent out as is (0: no limit)
     hexagrams: set[str] = field(default_factory=set)   # cast this turn, on the card, or said earlier
+    occasions: dict[str, list[str]] = field(default_factory=dict)        # 「今天」 -> its festivals and 节气
+    occasion_words: dict[str, tuple[str, ...]] = field(default_factory=dict)   # 「中秋」 -> (「中秋节」,)
 
     def add_page(self, page: dict) -> None:
         """A 黄历 page (engines/almanac.day_almanac or the almanac_day tool): its good hours for the user,
@@ -177,6 +180,10 @@ class Facts:
             shown = day.ahead if day.label == "今天" and day.ahead else day.branches
             lines.append(f"{day.label}：{day.words(shown) if shown else '没有'}")
         return "；".join(lines)
+
+    def occasion_listing(self) -> str:
+        """「今天：没有；明天：万圣夜；后天：没有」"""
+        return "；".join(f"{label}：{'、'.join(names) or '没有'}" for label, names in self.occasions.items())
 
 
 _NUM = r"(?:[零〇一二两三四五六七八九十]{1,3}|\d{1,2})"
@@ -396,6 +403,36 @@ def invented_hexagrams(text: str, known: set[str]) -> list[str]:
     return [name for name in named_hexagrams(text) if name not in known]
 
 
+# --- festivals ------------------------------------------------------------------
+
+OCCASION_DAYS = ("今天", "明天", "后天")
+_DAY_WORDS = {"今天": "今天", "今儿": "今天", "今日": "今天", "今晚": "今天", "今夜": "今天",
+              "明天": "明天", "明儿": "明天", "明日": "明天", "明晚": "明天", "后天": "后天"}
+_IS = r"(?:就是|正好是|恰好是|刚好是|正是|又是|是|正逢|逢|赶上|过|交)?"
+# Not about that very day: 「今天是中秋前一天」「明天国庆假期」「今天是春节后第一天」「今天小年夜」.
+# 节 is here too: 「中秋节前」 must not be read as 「中秋」 + 「节前」.
+_NOT_THE_DAY = r"(?![前后假期间第那左右附近当节夜])"
+
+
+@lru_cache(maxsize=4)
+def _occasion_said(words: tuple[str, ...]) -> re.Pattern:
+    name = "|".join(map(re.escape, sorted(words, key=len, reverse=True)))
+    return re.compile(rf"(?<![大前])(?P<day>{'|'.join(_DAY_WORDS)}){_IS}(?P<name>{name}){_NOT_THE_DAY}")
+
+
+def wrong_occasions(text: str, facts: Facts) -> list[str]:
+    """「今天是重阳节」「明天就是冬至」 said of a day whose festivals and 节气 code knows, when they are
+    not that day's. Only the plain claim is checked; talk about a festival's date is left to the model."""
+    if not facts.occasions or not facts.occasion_words:
+        return []
+    found = []
+    for match in _occasion_said(tuple(facts.occasion_words)).finditer(text or ""):
+        known = facts.occasions.get(_DAY_WORDS[match.group("day")])
+        if known is not None and not set(facts.occasion_words[match.group("name")]) & set(known):
+            found.append(match.group(0))
+    return list(dict.fromkeys(found))
+
+
 # --- reminders ------------------------------------------------------------------
 
 def _mentions(text: str, hhmm: str) -> bool:
@@ -431,16 +468,20 @@ class Review:
     too_long: int = 0                               # its length, when over the limit
     late_verdict: bool = False
     invented: list[str] = field(default_factory=list)  # hexagrams never cast
+    wrong_occasions: list[str] = field(default_factory=list)  # 「今天是重阳节」 when it is not
 
     @property
     def problems(self) -> bool:
-        return bool(self.wrong_hours or self.too_long or self.late_verdict or self.invented)
+        return bool(self.wrong_hours or self.too_long or self.late_verdict or self.invented
+                    or self.wrong_occasions)
 
     def sent_back(self) -> list[str]:
         """What a send-back was for, for Reply.checks and the log."""
         out = []
         if self.invented:
             out.append("退回:编卦「" + "」「".join(self.invented) + "」")
+        if self.wrong_occasions:
+            out.append("退回:节日「" + "」「".join(self.wrong_occasions) + "」")
         if self.wrong_hours:
             out.append("退回:时辰「" + "」「".join(self.wrong_hours) + "」")
         if self.late_verdict:
@@ -463,7 +504,8 @@ def review(text: str, facts: Facts | None = None) -> Review:
     return Review(repaired, fixes, wrong_hours(repaired, facts),
                   size if facts.max_chars and size > facts.max_chars else 0,
                   verdict_late(repaired, facts.question),
-                  invented_hexagrams(repaired, facts.hexagrams))
+                  invented_hexagrams(repaired, facts.hexagrams),
+                  wrong_occasions(repaired, facts))
 
 
 def redo_message(result: Review, facts: Facts) -> str:
@@ -471,6 +513,9 @@ def redo_message(result: Review, facts: Facts) -> str:
     if result.invented:
         asks.append(f"回答里说了「{'」「'.join(result.invented)}」，可这一卦没起过（这轮工具和前面的话里都没有）。"
                     "没起卦就别说卦名卦象；要用卦先调 daily_reading，照工具给的卦说。")
+    if result.wrong_occasions:
+        asks.append(f"回答里说了「{'」「'.join(result.wrong_occasions)}」，跟程序算的对不上。"
+                    f"这几天的节日节气只有：{facts.occasion_listing()}。照这个说，没有就别提。")
     if result.wrong_hours:
         said = "」「".join(result.wrong_hours)
         asks.append(f"回答里的时辰跟程序算的黄历对不上：「{said}」。对他好的时辰只有这些：{facts.listing()}。"
@@ -483,12 +528,16 @@ def redo_message(result: Review, facts: Facts) -> str:
 
 
 def settle(result: Review, facts: Facts) -> Review:
-    """Still wrong after one redo: the sentences with a wrong 时辰 or a made-up hexagram are taken
-    out; code says the hours itself."""
+    """Still wrong after one redo: the sentences with a wrong 时辰, a made-up hexagram or a wrong
+    festival are taken out; code says the hours itself."""
     kept = [s for s in _SENTENCE.findall(result.text) if s.strip() not in result.wrong_hours
-            and not any(name in named_hexagrams(s) for name in result.invented)]
+            and not any(name in named_hexagrams(s) for name in result.invented)
+            and not any(claim in s for claim in result.wrong_occasions)]
     text = "".join(kept).strip()
     fixes = list(result.fixes)
+    if result.wrong_occasions:
+        fixes.append("删掉说错的节日")
+        text = text or "这几天的节日节气：" + facts.occasion_listing() + "。"
     if result.wrong_hours:
         line = facts.sentence()
         if line:

@@ -234,10 +234,10 @@ class XiaoguaAgent:
                     "（系统）本轮起了卦，但解读还没有通过 validate_reading。先组装 reading_record 过闸门，PASS 后再回答。"}]})
                 continue
             validated = gate_passed or not cast_done
-            # The harness: wording fixed by code; a wrong 时辰, a made-up hexagram, a verdict left for
-            # later or a runaway length goes back once (one send-back in all); after that code says the
-            # 时辰 itself, takes made-up hexagrams out and lets the rest through. A fault in the harness
-            # never stops an answer.
+            # The harness: wording fixed by code; a wrong 时辰, a made-up hexagram, a wrong festival, a
+            # verdict left for later or a runaway length goes back once (one send-back in all); after that
+            # code says the 时辰 itself, takes made-up hexagrams and wrong festivals out and lets the rest
+            # through. A fault in the harness never stops an answer.
             try:
                 checked = harness.review(answer, facts)
             except Exception:  # noqa: BLE001
@@ -251,7 +251,7 @@ class XiaoguaAgent:
                 messages.append({"role": "user", "content": [{"type": "text",
                                                               "text": harness.redo_message(checked, facts)}]})
                 continue
-            if checked.wrong_hours or checked.invented:
+            if checked.wrong_hours or checked.invented or checked.wrong_occasions:
                 checked = harness.settle(checked, facts)
             answer, said_back = harness.say_reminders(checked.text, reminders)
             checks += checked.fixes + checked.let_through() + said_back + ([] if mood else ["漏情绪标签"])

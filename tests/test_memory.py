@@ -124,6 +124,15 @@ def test_morning_line_for_a_zodiac_and_on_a_solar_term():
     assert session.greeting(term_day).startswith("今天寒露。")
 
 
+def test_morning_line_on_a_festival_and_on_its_eve():
+    session = Session(None)
+    moon = session.greeting(datetime(2026, 9, 25, 9, 0).astimezone())
+    assert moon.startswith("今天中秋节。但愿人长久，千里共婵娟。宜") and "今天宜" not in moon
+    assert session.greeting(datetime(2026, 9, 24, 9, 0).astimezone()).endswith("明天中秋节。")
+    assert session.greeting(datetime(2026, 10, 1, 9, 0).astimezone()).startswith("今天国庆节。宜")   # no line
+    assert session.greeting(datetime(2026, 8, 27, 9, 0).astimezone()).startswith("今天中元节。宜")   # kept plain
+
+
 def test_morning_line_puts_plans_first_and_asks_once():
     session = Session(None)
     session.zodiac = "龙"

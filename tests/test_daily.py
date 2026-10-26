@@ -83,6 +83,36 @@ def test_picking_days_reports_clashes_unknown_words_and_approximations():
     assert almanac.pick_days("理发", DAY, 9999)["days"] == almanac.MAX_SPAN_DAYS
 
 
+# The whitelist, frozen: adding or dropping a festival is a decision, made by changing this list.
+FESTIVALS_2026 = [
+    ("2026-01-01", "元旦"), ("2026-01-26", "腊八节"), ("2026-02-10", "北方小年"), ("2026-02-11", "南方小年"),
+    ("2026-02-14", "情人节"), ("2026-02-16", "除夕"), ("2026-02-17", "春节"), ("2026-03-03", "元宵节"),
+    ("2026-03-08", "妇女节"), ("2026-03-20", "龙抬头"), ("2026-04-01", "愚人节"), ("2026-05-01", "劳动节"),
+    ("2026-05-10", "母亲节"), ("2026-06-01", "儿童节"), ("2026-06-19", "端午节"), ("2026-06-21", "父亲节"),
+    ("2026-08-19", "七夕"), ("2026-08-27", "中元节"), ("2026-09-10", "教师节"), ("2026-09-25", "中秋节"),
+    ("2026-10-01", "国庆节"), ("2026-10-18", "重阳节"), ("2026-10-31", "万圣夜"), ("2026-12-24", "平安夜"),
+    ("2026-12-25", "圣诞节")]
+
+
+def test_the_festivals_of_a_year():
+    found = [(d.isoformat(), n) for d, n in almanac.upcoming(date(2026, 1, 1), 365) if n not in almanac.SOLAR_TERMS]
+    assert found == FESTIVALS_2026
+    assert len([n for _, n in almanac.upcoming(date(2026, 1, 1), 365) if n in almanac.SOLAR_TERMS]) == 24
+
+
+def test_chuxi_is_the_eve_of_chunjie_even_on_the_29th():
+    assert almanac.festivals(date(2027, 2, 5)) == ["除夕"] and almanac.festivals(date(2027, 2, 6)) == ["春节"]
+    assert almanac._lunar(date(2027, 2, 5)).getDay() == 29                   # 腊月小，没有三十
+
+
+def test_a_day_with_a_festival_and_a_term_has_both():
+    assert almanac.occasions(date(2026, 10, 1)) == ["国庆节"]
+    assert almanac.occasions(date(2026, 12, 22)) == ["冬至"]
+    assert almanac.day_almanac(date(2026, 9, 25))["festivals"] == ["中秋节"]
+    assert almanac.pick_days("搬家", date(2026, 10, 1), 1)["matches"][0]["occasions"] == ["国庆节"]
+    assert all("occasions" not in m for m in almanac.pick_days("搬家", date(2026, 10, 2), 5)["matches"])
+
+
 def test_almanac_tools_default_to_today():
     assert tools.run_tool("almanac_day", {})["date"] == tools.today().isoformat()
     assert tools.run_tool("almanac_day", {"date": "2026-13-01"})["status"] == "TOOL_ERROR"
