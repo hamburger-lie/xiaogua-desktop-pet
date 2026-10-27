@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import threading
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QScrollArea, QSlider,
@@ -82,24 +82,34 @@ CHATTER_OFTEN = ("偶尔", "常常")
 
 
 class Card(QFrame):
-    """A rounded white card of setting rows, a thin inset line between two rows."""
+    """A rounded white card of setting rows, a thin inset line between two rows. A row hidden for
+    this choice (接口地址 for Claude, the key for Ollama) takes its line with it."""
 
     def __init__(self):
         super().__init__(objectName="card")
         self._rows = QVBoxLayout(self)
         self._rows.setContentsMargins(0, 2, 0, 2)
         self._rows.setSpacing(0)
+        self._lines: dict[QWidget, QWidget] = {}         # row -> the line above it
 
     def add(self, row: QWidget) -> QWidget:
         if self._rows.count():
-            line = QFrame(objectName="divider")
-            line.setFixedHeight(1)
-            inset = QHBoxLayout()
+            line = QWidget()
+            inset = QHBoxLayout(line)
             inset.setContentsMargins(14, 0, 14, 0)
-            inset.addWidget(line)
-            self._rows.addLayout(inset)
+            rule = QFrame(objectName="divider")
+            rule.setFixedHeight(1)
+            inset.addWidget(rule)
+            self._rows.addWidget(line)
+            self._lines[row] = line
+            row.installEventFilter(self)
         self._rows.addWidget(row)
         return row
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.ShowToParent, QEvent.HideToParent) and watched in self._lines:
+            self._lines[watched].setVisible(not watched.isHidden())
+        return False
 
 
 class Segmented(QWidget):

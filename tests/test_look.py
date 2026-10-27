@@ -248,3 +248,13 @@ def test_tips_learnt_before_stay_away_after_a_restart(pet):
     pet.apply_config(pet.config)
     pet.bubble.ask(pet.frameGeometry())
     assert not pet.bubble.footer.isVisibleTo(pet.bubble)
+
+
+def test_a_row_hidden_for_this_provider_takes_its_line_with_it(window):
+    from PySide6.QtCore import Qt
+    box = window.provider_box
+    box.setCurrentIndex(next(i for i in range(box.count()) if box.itemData(i, Qt.UserRole) == "ollama"))
+    card = window.key_entry.parentWidget()
+    assert window.key_entry.isHidden() and card._lines[window.key_entry].isHidden()
+    box.setCurrentIndex(next(i for i in range(box.count()) if box.itemData(i, Qt.UserRole) == "deepseek"))
+    assert not window.key_entry.isHidden() and not card._lines[window.key_entry].isHidden()
