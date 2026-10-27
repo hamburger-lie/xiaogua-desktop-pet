@@ -82,12 +82,12 @@ def test_memory_tools(tmp_path):
     changed = []
     session.on_memory = lambda: changed.append(1)
     assert session.run_tool("remember_fact", {"kind": "偏好", "text": "说话直接点"})["status"] == "OK"
-    assert session.run_daily_tool("remember_fact", {"kind": "计划", "text": "搬家",
-                                                    "date": "2026-10-11"})["status"] == "OK"
+    soon = (date.today() + timedelta(days=3)).isoformat()      # a fixed day drops out of the window in time
+    assert session.run_daily_tool("remember_fact", {"kind": "计划", "text": "搬家", "date": soon})["status"] == "OK"
     assert session.run_tool("remember_zodiac", {"zodiac": "龙"})["status"] == "OK" and session.zodiac == "龙"
     assert len(changed) == 2
-    assert "【小瓜记得的你】" in session.daily_context_text() and "说话直接点" in session.daily_context_text()
-    assert "搬家" in session.daily_context_text()
+    remembered = session.daily_context_text().split("【小瓜记得的你】")[1]     # not the 黄历's own 搬家
+    assert "说话直接点" in remembered and "搬家" in remembered
     session.memory = None
     assert session.run_tool("forget_fact", {"id": "m1"})["status"] == "UNAVAILABLE"
 
