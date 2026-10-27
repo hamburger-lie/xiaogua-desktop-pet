@@ -256,17 +256,21 @@ def load_motions(size: int = ART_PX, skin: str | None = None) -> dict:
 # ---------------------------------------------------------------- agents
 
 class OfflineAgent:
-    """No model connected yet: today's 黄历, and the local cast for a 能不能 question."""
+    """No model connected yet: today's 黄历, the local cast for a 能不能 question, and a plain 「不会」
+    for 紫微、奇门、八字 and the other systems 小瓜 does not do."""
 
     session = None          # set by the pet
 
     def ask(self, text, on_step=None, **_):
         from .agent import Reply
-        from .harness import YES_NO
+        from .harness import YES_NO, asked_systems, decline_line
         from .session import daily_context_text
         from .tools import cast_now
 
-        if YES_NO.search(text or ""):
+        if asked_systems(text or ""):
+            answer = decline_line(asked_systems(text))                # 紫微、奇门、八字…: not done here either
+            calls = []
+        elif YES_NO.search(text or ""):
             cast = cast_now(text)
             line = f"本卦{cast['primary']['name']}，互卦{cast['mutual']['name']}"
             if cast.get("changed"):

@@ -264,3 +264,64 @@ def test_the_context_names_the_festivals_ahead():
     text = daily_context_text(None, EVE_OF_HALLOWEEN)
     assert "接下来 7 天的节日节气：10月31日（周六）万圣夜。" in text
     assert "今天是国庆节" in daily_context_text(None, datetime(2026, 10, 1, 9, 0).astimezone())
+
+
+# --- other systems: 小瓜 does 梅花 and the 黄历 only -----------------------------------
+
+@pytest.mark.parametrize("question, systems", [
+    ("用紫微斗数帮我看看今年运势", ["紫微斗数"]), ("帮我排个八字", ["八字"]), ("你会奇门遁甲吗", ["奇门遁甲"]),
+    ("看看我家的风水", ["风水排盘"]), ("用小六壬算算", ["小六壬"]), ("摇个六爻看看", ["六爻"]),
+    ("紫微斗数是什么", []), ("八字准不准", []), ("不用八字，起一卦看看", []), ("风水轮流转，这次能成吗", []),
+    ("明天面试能成吗", []), ("今天宜什么", []),
+])
+def test_what_counts_as_asking_for_another_system(question, systems):
+    assert harness.asked_systems(question) == systems
+
+
+@pytest.mark.parametrize("sentence", ["你命宫坐紫微，今年化禄入财帛宫。", "日主偏弱，喜用神是水。",
+                                      "值符落在坎宫，宜往北。", "世爻持官鬼爻，事情有阻。", "落在大安宫，事情稳。",
+                                      "你家是九运宅，向星到山。"])
+def test_chart_words_of_other_systems_are_made_up(sentence):
+    assert harness.made_up_charts(sentence, "明天面试能成吗") == [sentence]
+
+
+@pytest.mark.parametrize("sentence", ["能成。卦是履，动爻在三爻，按规则走。", "今天宜理发，忌开市。祝你走大运！",
+                                      "紫微斗数要排命盘，小瓜不会。", "这单能签，开门红。"])
+def test_honest_answers_and_everyday_words_pass(sentence):
+    assert harness.made_up_charts(sentence, "明天面试能成吗") == []
+
+
+def test_asked_what_a_system_is_its_words_may_be_used_to_explain():
+    explained = "紫微斗数以命宫为主，看十四主星落在哪。"
+    assert harness.made_up_charts(explained, "紫微斗数是什么") == []
+    assert harness.made_up_charts("日主偏弱。", "紫微斗数是什么") == ["日主偏弱。"]        # not the one asked about
+
+
+def test_asked_for_another_system_the_model_is_told_and_a_chart_goes_back(tmp_path):
+    made_up = "你命宫坐紫微，今年化禄入财帛宫，财运不错。\n〔开心〕"
+    client = ScriptedClient([[text(made_up)], [text(made_up)]])
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("用紫微斗数帮我看看今年运势")
+    told = [block["text"] for block in client.requests[0]["messages"][-1]["content"]]
+    assert told[0] == "用紫微斗数帮我看看今年运势" and "小瓜只会梅花易数和黄历" in told[1]
+    assert reply.checks[0].startswith("退回:冒充别的术数") and "删掉冒充别的术数的话" in reply.checks
+    assert "命宫" not in reply.text and reply.text.startswith("紫微斗数小瓜不会，我只会梅花易数起卦和看黄历。")
+    assert len(client.requests) == 2
+    remembered = Session(tmp_path)                                         # the hint is not kept as his words
+    assert all("（系统）" not in m["content"] for m in remembered.recent_daily_messages() if m["role"] == "user")
+
+
+def test_an_answer_that_never_says_it_cannot_gets_the_honest_line(tmp_path):
+    client = ScriptedClient([[text("今年整体平稳，下半年好一些。\n〔平静〕")]])
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("帮我排个八字看看今年")
+    assert reply.text.startswith("八字小瓜不会，我只会梅花易数起卦和看黄历。") and "补:不会八字" in reply.checks
+
+
+def test_an_honest_answer_is_left_as_it_is(tmp_path):
+    client = ScriptedClient([[text("奇门遁甲我不会，只会梅花和黄历。想问哪件事，我起一卦看看？\n〔平静〕")]])
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("你会奇门遁甲吗")
+    assert reply.text == "奇门遁甲我不会，只会梅花和黄历。想问哪件事，我起一卦看看？" and not reply.checks
+
+
+def test_offline_says_it_too():
+    from meihua.companion.app import OfflineAgent
+    assert OfflineAgent().ask("用紫微斗数看看我").text.startswith("紫微斗数小瓜不会")

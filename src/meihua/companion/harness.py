@@ -15,6 +15,10 @@ place every answer passes (agent.ask, after the evidence gate):
   casts    a hexagram named in the answer must be one that was cast: this turn's tools or the
            talk so far. One the model made up goes back once; still there, the
            sentences with it are taken out.
+  systems  小瓜 does 梅花 and the 黄历 only. Asked for 紫微、奇门、六爻、风水排盘、八字 or
+           小六壬, the model is told so with the question, and an answer that never says
+           it cannot gets code's honest line first. Chart words of those systems
+           (命宫、值符、世爻、日主…) are made up: sent back once, then taken out.
   shape    how an answer is built: a 能不能 question answered with the verdict first,
            and no answer far longer than asked for. Sent back once; if the second try
            still misses, it goes out as it is (code cannot rewrite the model's thought).
@@ -331,7 +335,7 @@ DAILY_MAX_CHARS = 220          # asked for 60-150
 YES_NO = re.compile(r"(.)不\1|能.{0,10}吗|行吗|可以吗|适合.{0,8}吗|合适吗|好吗|成吗|顺吗|会.{0,8}吗|[能可]否|要不要|该不该")
 VERDICT = re.compile(r"能成|能行|能签|能去|能搬|能办|能过|可以|适合|合适|不太|不宜|不建议|别|不要|不行|不能|不成|成不了"
                      r"|没问题|稳|悬|缓|挪|往后放|值得|不值|去吧|签吧|^[行成能]|行[，。！,!]|成[，。！,!]"
-                     r"|有戏|没戏|够呛|难成|好成|把握|不如预期|顺利|不顺")
+                     r"|有戏|没戏|够呛|难成|好成|把握|不如预期|顺利|不顺|不会")       # 「会…吗」: 不会
 HEDGE = re.compile(r"不好说|说不准|难说|看情况|不一定|两说")
 _A_NOT_A = re.compile(r"(.)不\1")              # 成不成、行不行: the question said back, not an answer
 FIRST_CHARS = 20
@@ -433,6 +437,78 @@ def wrong_occasions(text: str, facts: Facts) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+# --- other systems --------------------------------------------------------------
+# 小瓜 does 梅花易数 and the 黄历, nothing else. Asked to work out 紫微、奇门、六爻、风水排盘、八字 or
+# 小六壬, it says so; the words of those charts in an answer can only be made up (no engine drew them).
+
+OTHER_SYSTEMS = {
+    "紫微斗数": r"紫微(?:斗数)?",
+    "奇门遁甲": r"奇门(?:遁甲)?",
+    "六爻": r"六爻|纳甲",
+    "风水排盘": r"九宫飞星|玄空飞星|飞星|宅盘|风水(?!轮流转|宝地)",
+    "八字": r"生辰八字|八字|四柱",
+    "小六壬": r"[小大]?六壬",
+}
+# Words only a chart of that system has. Everyday words that happen to match (开门、大运、比肩、
+# 坐山、动爻 — 梅花 has 动爻 too) are left out, so an honest 梅花 or 黄历 answer never trips them.
+CHART_WORDS = {
+    "紫微斗数": r"命宫|身宫|十四主星|主星|化禄|化权|化科|化忌|紫微星|天府星|紫微命盘",
+    "奇门遁甲": r"奇门局|值符|值使|天盘|[阴阳]遁[一二三四五六七八九]局|八门|九星落",
+    "六爻": r"世爻|应爻|纳甲|伏神|飞神|(?:官鬼|妻财|子孙|父母|兄弟)爻",
+    "风水排盘": r"飞星盘|宅盘|替星|山星|向星|[一二三四五六七八九]运宅|玄空",
+    "八字": r"日主|十神|喜用神|用神|忌神|伤官|七杀|劫财|偏印|命局|八字命盘|四柱命盘",
+    "小六壬": r"(?:大安|留连|速喜|赤口|小吉|空亡)宫|落(?:在)?(?:大安|留连|速喜|赤口|小吉|空亡)",
+}
+_CURIOUS = re.compile(r"是什么|是啥|什么是|啥是|区别|不同|哪个准|准不准|准吗|靠谱|怎么来的|历史|原理|听说")
+_NOT_THIS = re.compile(r"(?:不要|不用|别|不想|不是)用?$")
+DECLINE = re.compile(r"不会|没学|不懂|做不了|排不了|算不了|看不了|不能[排算看]|只会")
+
+
+def _system_hits(text: str, table: dict[str, str]) -> list[str]:
+    found = []
+    for name, pattern in table.items():
+        for match in re.finditer(pattern, text or ""):
+            if not _NOT_THIS.search(text[max(0, match.start() - 4):match.start()]):
+                found.append(name)
+                break
+    return found
+
+
+def asked_systems(question: str) -> list[str]:
+    """The systems the user wants worked out (「用紫微斗数看看我」「帮我排个八字」「你会奇门吗」), not
+    the ones only asked about (「紫微斗数是什么」「八字准不准」)."""
+    named = _system_hits(question, OTHER_SYSTEMS)
+    return [] if not named or _CURIOUS.search(question or "") else named
+
+
+def decline_line(systems: list[str]) -> str:
+    return (f"{'、'.join(systems) or '别的术数'}小瓜不会，我只会梅花易数起卦和看黄历。"
+            "你想问的事，我可以起一卦或者翻翻黄历帮你看。")
+
+
+def ask_hint(systems: list[str]) -> str:
+    """Said to the model with the question, this turn only: what it does not do and what it can."""
+    return (f"（系统）他要的是{'、'.join(systems)}。小瓜只会梅花易数和黄历：先如实说不会，"
+            "不编这些体系的盘面和术语；他想问的事，能用梅花起卦或翻黄历的就用它们答。")
+
+
+def made_up_charts(text: str, question: str = "") -> list[str]:
+    """Sentences with the chart words of a system 小瓜 does not do. A sentence saying it cannot is
+    honest, not made up; a question only asking what a system is lets that system's words through."""
+    curious = set(_system_hits(question, OTHER_SYSTEMS)) if _CURIOUS.search(question or "") else set()
+    table = {name: words for name, words in CHART_WORDS.items() if name not in curious}
+    return [s.strip() for s in _SENTENCE.findall(text or "") if s.strip() and not DECLINE.search(s)
+            and _system_hits(s, table)]
+
+
+def say_cannot(text: str, systems: list[str]) -> tuple[str, list[str]]:
+    """Asked for a system 小瓜 does not do and the answer never said so: code says it, first."""
+    if not systems or DECLINE.search(text or ""):
+        return text, []
+    line = decline_line(systems)
+    return (f"{line}\n{text}" if text else line), ["补:不会" + "、".join(systems)]
+
+
 # --- reminders ------------------------------------------------------------------
 
 def _mentions(text: str, hhmm: str) -> bool:
@@ -469,11 +545,12 @@ class Review:
     late_verdict: bool = False
     invented: list[str] = field(default_factory=list)  # hexagrams never cast
     wrong_occasions: list[str] = field(default_factory=list)  # 「今天是重阳节」 when it is not
+    made_up: list[str] = field(default_factory=list)  # sentences with 紫微 / 奇门 / 八字… chart words
 
     @property
     def problems(self) -> bool:
         return bool(self.wrong_hours or self.too_long or self.late_verdict or self.invented
-                    or self.wrong_occasions)
+                    or self.wrong_occasions or self.made_up)
 
     def sent_back(self) -> list[str]:
         """What a send-back was for, for Reply.checks and the log."""
@@ -482,6 +559,8 @@ class Review:
             out.append("退回:编卦「" + "」「".join(self.invented) + "」")
         if self.wrong_occasions:
             out.append("退回:节日「" + "」「".join(self.wrong_occasions) + "」")
+        if self.made_up:
+            out.append(f"退回:冒充别的术数「{self.made_up[0][:30]}」")
         if self.wrong_hours:
             out.append("退回:时辰「" + "」「".join(self.wrong_hours) + "」")
         if self.late_verdict:
@@ -505,7 +584,8 @@ def review(text: str, facts: Facts | None = None) -> Review:
                   size if facts.max_chars and size > facts.max_chars else 0,
                   verdict_late(repaired, facts.question),
                   invented_hexagrams(repaired, facts.hexagrams),
-                  wrong_occasions(repaired, facts))
+                  wrong_occasions(repaired, facts),
+                  made_up_charts(repaired, facts.question))
 
 
 def redo_message(result: Review, facts: Facts) -> str:
@@ -516,6 +596,9 @@ def redo_message(result: Review, facts: Facts) -> str:
     if result.wrong_occasions:
         asks.append(f"回答里说了「{'」「'.join(result.wrong_occasions)}」，跟程序算的对不上。"
                     f"这几天的节日节气只有：{facts.occasion_listing()}。照这个说，没有就别提。")
+    if result.made_up:
+        asks.append(f"回答里有「{result.made_up[0][:40]}」这样的话，那是紫微、奇门、六爻、风水排盘、八字或小六壬的盘面，"
+                    "小瓜不会这些，也没排过。只用梅花易数和黄历说；他要的是这些体系，就如实说不会。")
     if result.wrong_hours:
         said = "」「".join(result.wrong_hours)
         asks.append(f"回答里的时辰跟程序算的黄历对不上：「{said}」。对他好的时辰只有这些：{facts.listing()}。"
@@ -532,9 +615,13 @@ def settle(result: Review, facts: Facts) -> Review:
     festival are taken out; code says the hours itself."""
     kept = [s for s in _SENTENCE.findall(result.text) if s.strip() not in result.wrong_hours
             and not any(name in named_hexagrams(s) for name in result.invented)
-            and not any(claim in s for claim in result.wrong_occasions)]
+            and not any(claim in s for claim in result.wrong_occasions)
+            and s.strip() not in result.made_up]
     text = "".join(kept).strip()
     fixes = list(result.fixes)
+    if result.made_up:
+        fixes.append("删掉冒充别的术数的话")
+        text = text or decline_line(asked_systems(facts.question))
     if result.wrong_occasions:
         fixes.append("删掉说错的节日")
         text = text or "这几天的节日节气：" + facts.occasion_listing() + "。"

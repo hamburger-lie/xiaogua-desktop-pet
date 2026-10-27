@@ -175,7 +175,11 @@ class XiaoguaAgent:
             earlier = self.session.recent_daily_messages()     # this conversation, within a budget
         else:
             earlier = self.history[-2 * HISTORY_TURNS:]
-        messages = earlier + [{"role": "user", "content": [{"type": "text", "text": text}]}]
+        asked_for = harness.asked_systems(text)            # 紫微、奇门、八字…: 小瓜 does not do them
+        question = [{"type": "text", "text": text}]
+        if asked_for:
+            question.append({"type": "text", "text": harness.ask_hint(asked_for)})
+        messages = earlier + [{"role": "user", "content": question}]
 
         calls: list[dict[str, Any]] = []
         cast_done = gate_passed = False
@@ -234,10 +238,10 @@ class XiaoguaAgent:
                     "（系统）本轮起了卦，但解读还没有通过 validate_reading。先组装 reading_record 过闸门，PASS 后再回答。"}]})
                 continue
             validated = gate_passed or not cast_done
-            # The harness: wording fixed by code; a wrong 时辰, a made-up hexagram, a wrong festival, a
-            # verdict left for later or a runaway length goes back once (one send-back in all); after that
-            # code says the 时辰 itself, takes made-up hexagrams and wrong festivals out and lets the rest
-            # through. A fault in the harness never stops an answer.
+            # The harness: wording fixed by code; a wrong 时辰, a made-up hexagram, a wrong festival, another
+            # system's chart (紫微、奇门…), a verdict left for later or a runaway length goes back once (one
+            # send-back in all); after that code says the 时辰 itself, takes the made-up parts out and lets
+            # the rest through. A fault in the harness never stops an answer.
             try:
                 checked = harness.review(answer, facts)
             except Exception:  # noqa: BLE001
@@ -251,10 +255,11 @@ class XiaoguaAgent:
                 messages.append({"role": "user", "content": [{"type": "text",
                                                               "text": harness.redo_message(checked, facts)}]})
                 continue
-            if checked.wrong_hours or checked.invented or checked.wrong_occasions:
+            if checked.wrong_hours or checked.invented or checked.wrong_occasions or checked.made_up:
                 checked = harness.settle(checked, facts)
             answer, said_back = harness.say_reminders(checked.text, reminders)
-            checks += checked.fixes + checked.let_through() + said_back + ([] if mood else ["漏情绪标签"])
+            answer, said_no = harness.say_cannot(answer, asked_for)
+            checks += checked.fixes + checked.let_through() + said_back + said_no + ([] if mood else ["漏情绪标签"])
             if checks:
                 _log.info("回答检查：%s", "；".join(checks))
             if cancel is not None and cancel.is_set():
