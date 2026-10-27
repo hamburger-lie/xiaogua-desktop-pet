@@ -202,6 +202,7 @@ AMBIENT_MS = 33
 STEP_MOTIONS = {
     "cast_now": "起卦", "lookup_hexagrams": "翻书", "validate_reading": "思考",
     "almanac_day": "翻书", "almanac_pick_days": "翻书", "daily_reading": "起卦",
+    "ziwei_chart": "起卦", "qimen_chart": "起卦",
 }
 BUSY_LOOP = "思考"            # between steps, and after a one-shot step motion
 CAST_LOOP = "卦中"            # … once this answer has cast a reading: 小瓜 stays at the scroll
@@ -256,19 +257,25 @@ def load_motions(size: int = ART_PX, skin: str | None = None) -> dict:
 # ---------------------------------------------------------------- agents
 
 class OfflineAgent:
-    """No model connected yet: today's 黄历, the local cast for a 能不能 question, and a plain 「不会」
-    for 紫微、奇门、八字 and the other systems 小瓜 does not do."""
+    """No model connected yet: today's 黄历, the local cast for a 能不能 question, a 奇门 chart when named
+    (the moment is all it needs; 紫微 needs the birth read from his words, which waits for a model), and
+    a plain 「不会」 for 八字 and the other systems 小瓜 does not do."""
 
     session = None          # set by the pet
 
     def ask(self, text, on_step=None, **_):
         from .agent import Reply
-        from .harness import YES_NO, asked_systems, decline_line
+        from .harness import DRAWN_BY, YES_NO, asked_systems, honest_line
         from .session import daily_context_text
         from .tools import cast_now
 
-        if asked_systems(text or ""):
-            answer = decline_line(asked_systems(text))                # 紫微、奇门、八字…: not done here either
+        systems = asked_systems(text or "")
+        if "奇门遁甲" in systems:
+            answer, calls = self._qimen(text)
+        elif systems:
+            answer = honest_line([s for s in systems if s not in DRAWN_BY])     # 八字、六爻…: not done here either
+            if "紫微斗数" in systems:
+                answer += "离线时排不了紫微斗数：得从你的话里读出出生日期和时间，接上模型才行。"
             calls = []
         elif YES_NO.search(text or ""):
             cast = cast_now(text)
@@ -290,6 +297,22 @@ class OfflineAgent:
         if self.session is not None:
             self.session.record_daily_turn(text, "（离线）")
         return Reply(answer, True, calls)
+
+    def _qimen(self, text):
+        from .charts import qimen_chart
+
+        result = (self.session.run_daily_tool("qimen_chart", {"question": text}) if self.session is not None
+                  else qimen_chart(text))
+        calls = [{"tool": "qimen_chart", "status": result.get("status")}]
+        if result.get("status") != "OK":
+            return result.get("note") or result.get("error") or "这局没起出来。", calls
+        board, meaning = result["盘"], result["象义"]
+        lines = [f"离线奇门（{result['起局']}）：{result['要点']}。",
+                 f"值符{board['值符']}，{meaning[board['值符']].split('（')[0]}；"
+                 f"值使{board['值使']}，{meaning[board['值使']].split('（')[0]}。"]
+        if result.get("候选盘"):
+            lines.append("这一刻落在口径分歧处，另有候选盘，只当参考。")
+        return "\n".join(lines) + "\n\n接上模型后，小瓜能按你的事细讲。", calls
 
 
 def explain_error(error: Exception) -> str:
@@ -1997,6 +2020,10 @@ def selftest(out_path: str) -> int:
         report["cast"] = {"primary": cast["primary"]["name"], "hour_branch": cast["time"]["hour_branch"]}
         report["hexagram_lookup"] = not lookup_hexagrams([cast["primary"]["name"]])["missing"]
         report["almanac"] = run_tool("almanac_day", {}).get("status")
+        report["ziwei"] = run_tool("ziwei_chart", {"question": "自检", "birth": "1995-05-12 10:30", "sex": "女"}).get("gate")
+        report["qimen"] = run_tool("qimen_chart", {"question": "自检"}).get("gate")
+        if {report["ziwei"], report["qimen"]} != {"PASS"}:
+            raise RuntimeError(f"紫微 / 奇门没排出来：{report['ziwei']} / {report['qimen']}")
         report["providers"] = len(providers.PROVIDERS)
         QApplication.instance() or QApplication(sys.argv[:1])
         motions = load_motions(64)

@@ -25,8 +25,11 @@ METHOD_PREFIXES = {
     "meihua": {"MH"},
     "xiaoliu-ren": {"XL"},
     "bazi": {"BZ"},
+    "ziwei": {"ZW"},
+    "qimen": {"QM"},
     "space-observation": set(),
 }
+BOARD_PREFIXES = {"MH", "XL", "BZ", "ZW", "QM"}
 
 PROTOCOL_PREFIXES = {
     "REL",
@@ -76,18 +79,13 @@ HIGH_RISK_TOPICS = (
     "出轨",
 )
 
-UNADMITTED_MARKERS = (
-    "奇门盘",
-    "值符",
-    "值使",
-    "飞星盘",
-    "玄空飞星",
-    "纳甲",
-    "世爻",
-    "应爻",
-    "紫微命盘",
-    "十四主星",
-)
+# Chart words only one system's chart has (GUARD-07). In a reading of that system they are its own
+# chart; in any other reading they are a chart nobody drew. 飞星 and 六爻 are not admitted: never.
+SYSTEM_MARKERS = {
+    "qimen": ("奇门盘", "奇门局", "值符", "值使"),
+    "ziwei": ("紫微命盘", "十四主星", "命宫主星"),
+    None: ("飞星盘", "玄空飞星", "纳甲", "世爻", "应爻"),
+}
 
 EVIDENCE_ID_RE = re.compile(r"\b([A-Z]+-\d+)\b")
 HEADING_ID_RE = re.compile(r"^#{1,6}\s+([A-Z]+-\d+)\b", re.MULTILINE)
@@ -98,6 +96,8 @@ def load_registry() -> dict[str, set[str]]:
         ROOT / "evidence" / "meihua.md",
         ROOT / "evidence" / "xiaoliu-ren.md",
         ROOT / "evidence" / "bazi.md",
+        ROOT / "evidence" / "ziwei.md",
+        ROOT / "evidence" / "qimen.md",
         ROOT / "protocols" / "relationships.md",
         ROOT / "protocols" / "work-money.md",
         ROOT / "protocols" / "action-space.md",
@@ -114,6 +114,8 @@ def load_registry() -> dict[str, set[str]]:
         "MH": {"MH-01", "MH-02", "MH-03", "MH-04", "MH-05", "MH-06", "MH-07"},
         "XL": {"XL-01", "XL-02", "XL-03"},
         "BZ": {"BZ-01", "BZ-02", "BZ-03", "BZ-04", "BZ-05"},
+        "ZW": {f"ZW-0{i}" for i in range(1, 8)},
+        "QM": {f"QM-0{i}" for i in range(1, 8)},
         "REL": {"REL-01", "REL-02", "REL-03", "REL-04", "REL-05"},
         "WORK": {"WORK-01"},
         "COOP": {"COOP-01"},
@@ -121,7 +123,7 @@ def load_registry() -> dict[str, set[str]]:
         "FIND": {"FIND-01"},
         "TIME": {"TIME-01"},
         "SPACE": {"SPACE-01"},
-        "GUARD": {f"GUARD-0{i}" for i in range(1, 7)},
+        "GUARD": {f"GUARD-0{i}" for i in range(1, 8)},
     }
     for prefix, expected in required.items():
         found = by_prefix.get(prefix, set())
@@ -239,7 +241,7 @@ def validate_reading(record: dict[str, Any], registry: dict[str, set[str]] | Non
             prefix = prefix_of(evidence_id)
             if prefix not in allowed_prefixes:
                 block("method_mix", f"{method} cannot cite {evidence_id}")
-            if prefix in {"MH", "XL", "BZ"} and board_prefixes and prefix not in board_prefixes:
+            if prefix in BOARD_PREFIXES and board_prefixes and prefix not in board_prefixes:
                 block("board_mix", f"{method} cannot cite board evidence {evidence_id}")
             all_ids.append(evidence_id)
 
@@ -284,7 +286,7 @@ def validate_reading(record: dict[str, Any], registry: dict[str, set[str]] | Non
             prefix = prefix_of(evidence_id)
             if prefix not in allowed_prefixes:
                 block("method_mix", f"{method} cannot cite {evidence_id}")
-            if prefix in {"MH", "XL", "BZ"} and board_prefixes and prefix not in board_prefixes:
+            if prefix in BOARD_PREFIXES and board_prefixes and prefix not in board_prefixes:
                 block("board_mix", f"{method} cannot cite board evidence {evidence_id}")
             all_ids.append(evidence_id)
 
@@ -300,9 +302,13 @@ def validate_reading(record: dict[str, Any], registry: dict[str, set[str]] | Non
         if phrase in joined:
             block("forbidden_phrase", f"forbidden expression detected: {phrase}")
 
-    for marker in UNADMITTED_MARKERS:
-        if marker in joined:
-            block("unadmitted_system", f"unadmitted system marker detected: {marker}")
+    for owner, markers in SYSTEM_MARKERS.items():
+        if owner == method:
+            continue
+        for marker in markers:
+            if marker in joined:
+                block("unadmitted_system" if owner is None else "system_mix",
+                      f"{owner or 'unadmitted'} chart marker in a {method} reading: {marker}")
 
     prohibited_topics = record.get("prohibited_topics") or []
     if not isinstance(prohibited_topics, list):

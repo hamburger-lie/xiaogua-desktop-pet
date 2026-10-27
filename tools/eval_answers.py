@@ -22,6 +22,7 @@ from datetime import datetime
 
 from meihua.companion import config, harness
 from meihua.companion.agent import make_agent
+from meihua.companion.charts import CHART_TOOLS
 from meihua.companion.memory import Memory
 from meihua.companion.session import Session, answer_facts
 
@@ -34,6 +35,8 @@ QUESTIONS = [
     "明天适合理发吗",
     "这周哪天适合搬家",
     "十分钟后提醒我喝水",
+    "用紫微斗数看看我的性格，我1995年5月12日上午10点半出生，女",
+    "用奇门遁甲看看我下午去见客户怎么样",
 ]
 TIME_WORDS = ("点", "时辰", "子时", "丑时", "寅时", "卯时", "辰时", "巳时", "午时", "未时", "申时", "酉时", "戌时", "亥时")
 
@@ -59,12 +62,12 @@ def main() -> int:
             agent.session = Session(None)
             agent.session.memory = Memory()
             agent.session.zodiac = args.zodiac
-            looked_up = []                                    # 黄历 pages the agent fetched: same facts as it had
+            looked_up = []                     # 黄历 pages and 紫微 / 奇门 charts the agent got: same facts as it had
             run_tool = agent._run_tool
 
             def watched(name, arguments, run=run_tool, seen=looked_up):
                 out = run(name, arguments)
-                if name == "almanac_day":
+                if name == "almanac_day" or name in CHART_TOOLS:
                     seen.append(out)
                 return out
 
@@ -78,8 +81,9 @@ def main() -> int:
                 continue
             seconds = round(time.time() - start, 1)
             facts = answer_facts(args.zodiac)
-            for page in looked_up:
-                facts.add_page(page)
+            for output in looked_up:
+                facts.add_page(output)
+                facts.add_chart(output)
             after = harness.review(reply.text, facts)
             for check in reply.checks:
                 raw[check.split("×")[0].split("「")[0]] += 1
@@ -87,6 +91,8 @@ def main() -> int:
                 left[fix.split("×")[0]] += 1
             if after.wrong_hours:
                 left["时辰"] += 1
+            if after.made_up or after.chart_slips or after.crossed:
+                left["盘面"] += 1
             rows.append({"question": question, "seconds": seconds, "checks": reply.checks,
                          "left": after.fixes + after.wrong_hours, "mood": reply.mood, "answer": reply.text})
             print(f"{question}  {seconds}s  {'；'.join(reply.checks) or '干净'}")

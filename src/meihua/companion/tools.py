@@ -117,6 +117,8 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "almanac_pick_days": almanac_pick_days,
     # the one-call reading needs a session: a throwaway one here
     "daily_reading": lambda **kw: _session_tool("daily_reading", kw),
+    "ziwei_chart": lambda **kw: _session_tool("ziwei_chart", kw),
+    "qimen_chart": lambda **kw: _session_tool("qimen_chart", kw),
 }
 
 

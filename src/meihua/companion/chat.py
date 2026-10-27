@@ -41,7 +41,7 @@ STEP_LABELS = {
     "cast_now": "正在起卦", "lookup_hexagrams": "正在翻卦书", "validate_reading": "正在核对证据",
     "almanac_day": "正在翻黄历", "almanac_pick_days": "正在挑日子", "remember_zodiac": "记下你的属相",
     "remember_fact": "记下来", "forget_fact": "划掉一条", "close_fact": "记下结果",
-    "daily_reading": "正在起卦",
+    "daily_reading": "正在起卦", "ziwei_chart": "正在排紫微命盘", "qimen_chart": "正在起奇门局",
 }
 
 STYLE = f"""

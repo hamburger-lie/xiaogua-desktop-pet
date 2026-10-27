@@ -17,6 +17,7 @@ from typing import Any
 
 from . import harness
 from .config import DEFAULT_MODEL as _CONFIG_DEFAULT
+from .charts import CHART_TOOLS
 from .fast import FAST_TOOLS
 from .session import answer_facts, daily_context_text, daily_tool_schemas
 from .tools import DAILY_TOOL_SCHEMAS, run_tool
@@ -58,6 +59,11 @@ reading_record 照这个格式，字段名一个都不能改（claims 和 action
  "uncertainties":["…"],"prohibited_topics":[]}
 strength 用 1；用 2 要至少两个证据编号，并且 conditions 是非空的字符串列表。证据编号用 MH-01 本互变、MH-02 体用、MH-03 旺衰、MH-05 场景分类、TIME-01 时机出行，再加对应的协议：WORK-01 事业跳槽、COOP-01 合作、MONEY-01 钱财、REL-01～REL-05 感情关系、GUARD-01～GUARD-06 安全边界。actions 要可逆、低风险，reality_anchor 写现实里能核对的一步。
 回答时卦名可以说，体用、五行、比和这些词不说，翻成人话（「你跟这事气场顺」「对方压你一头」）。
+
+## 紫微和奇门（他点名才用）
+他点名要紫微斗数（看命盘、性格、做事方式、人生阶段），调 ziwei_chart：要公历出生日期、几点几分和性别，缺哪样问哪样，不猜；知道出生城市就带经度。点名要奇门遁甲看一件近期的事，调 qimen_chart，追问同一件事传 follow_up=true。没点名不主动用；问一件事能不能成，还是 daily_reading 起梅花卦。
+盘面只照工具结果说：命宫、主星、四化、局、值符值使照「盘」和「要点」，星和门的意思照「象义」讲，不凭记忆；工具没给的杂曜、庙旺、流年、格局吉凶不说。有「候选盘」时，两张一样的地方才说死，「不同」里的要两说。紫微不谈寿命、疾病、生育、婚姻成败；奇门盘上的方位不是他身边的方向，不说「往东南走」。
+说法照样像熟人聊天：第一句先说盘里最突出的一点（「你是巨门坐命，爱较真」），再两三句依据，术语顺手翻成人话，整条 100～180 字。
 
 ## 边界
 看病吃药、怀孕、打官司、投资炒股、借钱担保：黄历和卦都替代不了医生、律师和他自己的判断，最多说说日子好不好，具体怎么办让他找专业的人。不说「必然、注定、一定、大凶、血光之灾」，不制造焦虑，不推销开光、化解、转运的东西。
@@ -175,7 +181,7 @@ class XiaoguaAgent:
             earlier = self.session.recent_daily_messages()     # this conversation, within a budget
         else:
             earlier = self.history[-2 * HISTORY_TURNS:]
-        asked_for = harness.asked_systems(text)            # 紫微、奇门、八字…: 小瓜 does not do them
+        asked_for = harness.asked_systems(text)            # 紫微、奇门 drawn (charts.py); 八字、六爻…: not done
         question = [{"type": "text", "text": text}]
         if asked_for:
             question.append({"type": "text", "text": harness.ask_hint(asked_for)})
@@ -194,6 +200,7 @@ class XiaoguaAgent:
         for message in earlier:
             if isinstance(message.get("content"), str):
                 facts.hexagrams |= set(harness.named_hexagrams(message["content"]))
+        facts.can_draw = [s for s in asked_for if s in harness.DRAWN_BY]
         for _ in range(MAX_ROUNDS):
             if cancel is not None and cancel.is_set():
                 return Reply("", False, calls, "cancelled")
@@ -212,9 +219,11 @@ class XiaoguaAgent:
                     calls.append({"tool": block.name, "status": output.get("status")})
                     if block.name == "cast_now" and output.get("status") == "OK":
                         cast_done = True
-                    if block.name in FAST_TOOLS and output.get("status") == "OK":
+                    if block.name in FAST_TOOLS and output.get("status") == "OK" \
+                            or block.name in CHART_TOOLS and output.get("status") in ("OK", "REUSED"):
                         cast_done = True                  # a reading, checked by code in the same call
                         gate_passed = gate_passed or output.get("gate") == "PASS"
+                    facts.add_chart(output)               # 紫微 / 奇门: what the answer may say of the chart
                     if block.name == "validate_reading" and output.get("status") == "PASS":
                         gate_passed = True
                     facts.hexagrams |= harness.cast_names(output)
@@ -239,9 +248,10 @@ class XiaoguaAgent:
                 continue
             validated = gate_passed or not cast_done
             # The harness: wording fixed by code; a wrong 时辰, a made-up hexagram, a wrong festival, another
-            # system's chart (紫微、奇门…), a verdict left for later or a runaway length goes back once (one
-            # send-back in all); after that code says the 时辰 itself, takes the made-up parts out and lets
-            # the rest through. A fault in the harness never stops an answer.
+            # system's chart (六爻、八字…), a drawn 紫微 / 奇门 chart said wrong or past GUARD-07, a verdict left
+            # for later or a runaway length goes back once (one send-back in all); after that code says the
+            # 时辰 itself, takes the made-up parts out and lets the rest through. A fault in the harness never
+            # stops an answer.
             try:
                 checked = harness.review(answer, facts)
             except Exception:  # noqa: BLE001
@@ -255,7 +265,8 @@ class XiaoguaAgent:
                 messages.append({"role": "user", "content": [{"type": "text",
                                                               "text": harness.redo_message(checked, facts)}]})
                 continue
-            if checked.wrong_hours or checked.invented or checked.wrong_occasions or checked.made_up:
+            if checked.wrong_hours or checked.invented or checked.wrong_occasions or checked.made_up \
+                    or checked.chart_slips or checked.crossed:
                 checked = harness.settle(checked, facts)
             answer, said_back = harness.say_reminders(checked.text, reminders)
             answer, said_no = harness.say_cannot(answer, asked_for)

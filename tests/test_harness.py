@@ -266,7 +266,7 @@ def test_the_context_names_the_festivals_ahead():
     assert "今天是国庆节" in daily_context_text(None, datetime(2026, 10, 1, 9, 0).astimezone())
 
 
-# --- other systems: 小瓜 does 梅花 and the 黄历 only -----------------------------------
+# --- other systems: 梅花 and the 黄历, and 紫微 / 奇门 when named (test_charts.py) -------------------
 
 @pytest.mark.parametrize("question, systems", [
     ("用紫微斗数帮我看看今年运势", ["紫微斗数"]), ("帮我排个八字", ["八字"]), ("你会奇门遁甲吗", ["奇门遁甲"]),
@@ -297,14 +297,14 @@ def test_asked_what_a_system_is_its_words_may_be_used_to_explain():
     assert harness.made_up_charts("日主偏弱。", "紫微斗数是什么") == ["日主偏弱。"]        # not the one asked about
 
 
-def test_asked_for_another_system_the_model_is_told_and_a_chart_goes_back(tmp_path):
-    made_up = "你命宫坐紫微，今年化禄入财帛宫，财运不错。\n〔开心〕"
+def test_asked_for_a_system_it_does_not_do_the_model_is_told_and_a_chart_goes_back(tmp_path):
+    made_up = "日主偏弱，喜用神是水，今年财运不错。\n〔开心〕"
     client = ScriptedClient([[text(made_up)], [text(made_up)]])
-    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("用紫微斗数帮我看看今年运势")
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("帮我排个八字看看今年运势")
     told = [block["text"] for block in client.requests[0]["messages"][-1]["content"]]
-    assert told[0] == "用紫微斗数帮我看看今年运势" and "小瓜只会梅花易数和黄历" in told[1]
+    assert told[0] == "帮我排个八字看看今年运势" and "小瓜只会梅花易数、紫微斗数、奇门遁甲和黄历" in told[1]
     assert reply.checks[0].startswith("退回:冒充别的术数") and "删掉冒充别的术数的话" in reply.checks
-    assert "命宫" not in reply.text and reply.text.startswith("紫微斗数小瓜不会，我只会梅花易数起卦和看黄历。")
+    assert "日主" not in reply.text and reply.text.startswith("八字小瓜不会，我只会梅花易数起卦和看黄历，点名的话也能排紫微斗数和奇门遁甲。")
     assert len(client.requests) == 2
     remembered = Session(tmp_path)                                         # the hint is not kept as his words
     assert all("（系统）" not in m["content"] for m in remembered.recent_daily_messages() if m["role"] == "user")
@@ -313,15 +313,15 @@ def test_asked_for_another_system_the_model_is_told_and_a_chart_goes_back(tmp_pa
 def test_an_answer_that_never_says_it_cannot_gets_the_honest_line(tmp_path):
     client = ScriptedClient([[text("今年整体平稳，下半年好一些。\n〔平静〕")]])
     reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("帮我排个八字看看今年")
-    assert reply.text.startswith("八字小瓜不会，我只会梅花易数起卦和看黄历。") and "补:不会八字" in reply.checks
+    assert reply.text.startswith("八字小瓜不会，我只会梅花易数起卦和看黄历") and "补:不会八字" in reply.checks
 
 
 def test_an_honest_answer_is_left_as_it_is(tmp_path):
-    client = ScriptedClient([[text("奇门遁甲我不会，只会梅花和黄历。想问哪件事，我起一卦看看？\n〔平静〕")]])
-    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("你会奇门遁甲吗")
-    assert reply.text == "奇门遁甲我不会，只会梅花和黄历。想问哪件事，我起一卦看看？" and not reply.checks
+    client = ScriptedClient([[text("六爻我不会，只会梅花和黄历。想问哪件事，我起一卦看看？\n〔平静〕")]])
+    reply = XiaoguaAgent(client=client, session=Session(tmp_path)).ask("你会六爻吗")
+    assert reply.text == "六爻我不会，只会梅花和黄历。想问哪件事，我起一卦看看？" and not reply.checks
 
 
 def test_offline_says_it_too():
     from meihua.companion.app import OfflineAgent
-    assert OfflineAgent().ask("用紫微斗数看看我").text.startswith("紫微斗数小瓜不会")
+    assert OfflineAgent().ask("帮我排个八字").text.startswith("八字小瓜不会")

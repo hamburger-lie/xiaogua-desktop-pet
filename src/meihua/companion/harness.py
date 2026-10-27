@@ -15,10 +15,14 @@ place every answer passes (agent.ask, after the evidence gate):
   casts    a hexagram named in the answer must be one that was cast: this turn's tools or the
            talk so far. One the model made up goes back once; still there, the
            sentences with it are taken out.
-  systems  小瓜 does 梅花 and the 黄历 only. Asked for 紫微、奇门、六爻、风水排盘、八字 or
-           小六壬, the model is told so with the question, and an answer that never says
-           it cannot gets code's honest line first. Chart words of those systems
-           (命宫、值符、世爻、日主…) are made up: sent back once, then taken out.
+  systems  小瓜 does 梅花 and the 黄历, and draws 紫微 and 奇门 when named (charts.py).
+           Asked for 六爻、风水排盘、八字 or 小六壬, the model is told so
+           with the question, and an answer that never says it cannot gets code's honest
+           line first. Chart words of a system no engine drew this turn (命宫、值符、世爻、
+           日主…) are made up; what an answer says of a drawn chart (命宫在巳、巨门坐命、值使
+           落震…) must be on it, and on every candidate chart unless both are said; GUARD-07
+           (紫微 on 寿命 or 婚姻成败, 奇门 on betting or 往东南走) is not crossed. Each is sent
+           back once, then taken out. The old 「小瓜不会紫微」 is sent back once too.
   shape    how an answer is built: a 能不能 question answered with the verdict first,
            and no answer far longer than asked for. Sent back once; if the second try
            still misses, it goes out as it is (code cannot rewrite the model's thought).
@@ -37,7 +41,7 @@ from functools import lru_cache
 
 # --- repairs ------------------------------------------------------------------
 
-_IDS = r"(?:MH|WORK|COOP|MONEY|REL|GUARD|TIME|FIND|SPACE)-\d{2}"
+_IDS = r"(?:MH|WORK|COOP|MONEY|REL|GUARD|TIME|FIND|SPACE|ZW|QM)-\d{2}"
 
 REPAIRS: list[tuple[str, re.Pattern, str]] = [(name, re.compile(pattern), repl) for name, pattern, repl in (
     ("破折号", r"[ \t]*(?:——|—|－－|--)+[ \t]*", "，"),
@@ -135,6 +139,24 @@ class Facts:
     hexagrams: set[str] = field(default_factory=set)   # cast this turn, on the card, or said earlier
     occasions: dict[str, list[str]] = field(default_factory=dict)        # 「今天」 -> its festivals and 节气
     occasion_words: dict[str, tuple[str, ...]] = field(default_factory=dict)   # 「中秋」 -> (「中秋节」,)
+    charts: dict[str, list[list[dict]]] = field(default_factory=dict)  # 紫微 / 奇门 drawn this turn: each draw's charts
+    gists: dict[str, list[str]] = field(default_factory=dict)          # … and its 「要点」, said back when it goes wrong
+    can_draw: list[str] = field(default_factory=list)                  # named this turn and drawable (DRAWN_BY)
+
+    @property
+    def drawn(self) -> set[str]:
+        return set(self.charts)
+
+    def add_chart(self, output: dict) -> None:
+        """A chart tool's result (charts.py): what an answer may say of 紫微 or 奇门 this turn."""
+        if not isinstance(output, dict) or output.get("system") not in CHART_READERS \
+                or output.get("status") not in ("OK", "REUSED"):
+            return
+        self.charts.setdefault(output["system"], []).append(chart_facts(output))
+        self.gists.setdefault(output["system"], []).append(output.get("要点", ""))
+
+    def chart_listing(self) -> str:
+        return "；".join(gist for gists in self.gists.values() for gist in gists if gist)
 
     def add_page(self, page: dict) -> None:
         """A 黄历 page (engines/almanac.day_almanac or the almanac_day tool): its good hours for the user,
@@ -204,6 +226,7 @@ _BRANCH = re.compile(r"(?<![孩儿日样面君弟男女妻父分种鸭帽房车�
                      r"([子丑寅卯辰巳午未申酉戌亥])时(?![候间期代光机常段])")
 _NEGATIVE = re.compile(r"别|不要|避开|避一避|躲开|躲一躲|不好|不宜|不太好|不合适|凶|忌|冲你|犯冲")
 _CLAIM = re.compile(r"时辰|吉时|好时|时候|时段|钟点|出门|动身|最好|合适|适合|不错|吉")
+_CHART_MOMENT = re.compile(r"出生|生于|起局|起的局|这一局|排盘|排的盘")   # 「子时出生」: a chart's hour, not advice
 _SENTENCE = re.compile(r"[^。！？!?；;\n]+[。！？!?；;]*\n?|\n")
 
 
@@ -271,7 +294,7 @@ def time_claims(text: str) -> list[TimeClaim]:
     claims = []
     for sentence in _SENTENCE.findall(text):
         body = sentence.strip()
-        if not body or _NEGATIVE.search(body) or not _CLAIM.search(body):
+        if not body or _NEGATIVE.search(body) or not _CLAIM.search(body) or _CHART_MOMENT.search(body):
             continue
         claim = TimeClaim(body)
         masked = body
@@ -438,8 +461,9 @@ def wrong_occasions(text: str, facts: Facts) -> list[str]:
 
 
 # --- other systems --------------------------------------------------------------
-# 小瓜 does 梅花易数 and the 黄历, nothing else. Asked to work out 紫微、奇门、六爻、风水排盘、八字 or
-# 小六壬, it says so; the words of those charts in an answer can only be made up (no engine drew them).
+# 小瓜 does 梅花易数 and the 黄历. Since 2026-10-27 it also draws 紫微斗数 and 奇门遁甲 when the
+# user names one (charts.py; evidence/ziwei.md, evidence/qimen.md). Asked to work out 六爻、风水排盘、八字
+# or 小六壬, it says it cannot; the words of a chart no engine drew this turn can only be made up.
 
 OTHER_SYSTEMS = {
     "紫微斗数": r"紫微(?:斗数)?",
@@ -459,9 +483,11 @@ CHART_WORDS = {
     "八字": r"日主|十神|喜用神|用神|忌神|伤官|七杀|劫财|偏印|命局|八字命盘|四柱命盘",
     "小六壬": r"(?:大安|留连|速喜|赤口|小吉|空亡)宫|落(?:在)?(?:大安|留连|速喜|赤口|小吉|空亡)",
 }
+DRAWN_BY = {"紫微斗数": "ziwei_chart", "奇门遁甲": "qimen_chart"}     # drawn by charts.py
 _CURIOUS = re.compile(r"是什么|是啥|什么是|啥是|区别|不同|哪个准|准不准|准吗|靠谱|怎么来的|历史|原理|听说")
 _NOT_THIS = re.compile(r"(?:不要|不用|别|不想|不是)用?$")
 DECLINE = re.compile(r"不会|没学|不懂|做不了|排不了|算不了|看不了|不能[排算看]|只会")
+REFUSE = re.compile(r"不会|没学|不懂|只会梅花|只会黄历|只会看黄历")     # the old 「小瓜不会紫微」, untrue now
 
 
 def _system_hits(text: str, table: dict[str, str]) -> list[str]:
@@ -481,32 +507,231 @@ def asked_systems(question: str) -> list[str]:
     return [] if not named or _CURIOUS.search(question or "") else named
 
 
+def _split(systems: list[str]) -> tuple[list[str], list[str]]:
+    """(drawn here, not done at all)."""
+    return [s for s in systems if s in DRAWN_BY], [s for s in systems if s not in DRAWN_BY]
+
+
 def decline_line(systems: list[str]) -> str:
-    return (f"{'、'.join(systems) or '别的术数'}小瓜不会，我只会梅花易数起卦和看黄历。"
+    return (f"{'、'.join(systems) or '别的术数'}小瓜不会，我只会梅花易数起卦和看黄历，点名的话也能排紫微斗数和奇门遁甲。"
             "你想问的事，我可以起一卦或者翻翻黄历帮你看。")
 
 
+def draw_first_line(systems: list[str]) -> str:
+    lines = {"紫微斗数": "紫微斗数得先排出盘才能说：告诉我公历出生日期、几点几分和性别。",
+             "奇门遁甲": "奇门遁甲得先起出局才能说，你再问我一次这件事。"}
+    return "".join(lines[s] for s in systems)
+
+
+def honest_line(systems: list[str]) -> str:
+    """What code says when every sentence of the answer had to go."""
+    here, never = _split(systems)
+    return (decline_line(never) if never else "") + (draw_first_line(here) if here else "")
+
+
 def ask_hint(systems: list[str]) -> str:
-    """Said to the model with the question, this turn only: what it does not do and what it can."""
-    return (f"（系统）他要的是{'、'.join(systems)}。小瓜只会梅花易数和黄历：先如实说不会，"
-            "不编这些体系的盘面和术语；他想问的事，能用梅花起卦或翻黄历的就用它们答。")
+    """Said to the model with the question, this turn only: what it draws and what it does not do."""
+    here, never = _split(systems)
+    parts = []
+    if here:
+        tools = "、".join(f"{s}调 {DRAWN_BY[s]}" for s in here)
+        parts.append(f"他要的是{'、'.join(here)}，这个能排：{tools}。缺出生信息就先问，不猜；只照工具给的「盘」和「象义」说，"
+                     "不凭记忆，工具没给的星曜、格局、流年不说。")
+    if never:
+        parts.append(f"他要的是{'、'.join(never)}。小瓜只会梅花易数、紫微斗数、奇门遁甲和黄历：先如实说不会，"
+                     "不编这些体系的盘面和术语；他想问的事，能用梅花起卦或翻黄历的就用它们答。")
+    return "（系统）" + "".join(parts)
 
 
-def made_up_charts(text: str, question: str = "") -> list[str]:
-    """Sentences with the chart words of a system 小瓜 does not do. A sentence saying it cannot is
+def made_up_charts(text: str, question: str = "", drawn=()) -> list[str]:
+    """Sentences with the chart words of a system no engine drew this turn. A sentence saying it cannot is
     honest, not made up; a question only asking what a system is lets that system's words through."""
     curious = set(_system_hits(question, OTHER_SYSTEMS)) if _CURIOUS.search(question or "") else set()
-    table = {name: words for name, words in CHART_WORDS.items() if name not in curious}
+    table = {name: words for name, words in CHART_WORDS.items() if name not in curious and name not in drawn}
+    own = "|".join(OWN_WORDS[name] for name in drawn if name in OWN_WORDS)    # 七杀 is a 紫微 star too
     return [s.strip() for s in _SENTENCE.findall(text or "") if s.strip() and not DECLINE.search(s)
-            and _system_hits(s, table)]
+            and _system_hits(re.sub(own, "□", s) if own else s, table)]
 
 
 def say_cannot(text: str, systems: list[str]) -> tuple[str, list[str]]:
     """Asked for a system 小瓜 does not do and the answer never said so: code says it, first."""
-    if not systems or DECLINE.search(text or ""):
+    _here, never = _split(systems)
+    if not never or DECLINE.search(text or ""):
         return text, []
-    line = decline_line(systems)
-    return (f"{line}\n{text}" if text else line), ["补:不会" + "、".join(systems)]
+    line = decline_line(never)
+    return (f"{line}\n{text}" if text else line), ["补:不会" + "、".join(never)]
+
+
+def refused_to_draw(text: str, can: list[str], drawn) -> list[str]:
+    """Asked for 紫微 or 奇门, nothing drawn, and the answer says 小瓜 cannot (the old line)."""
+    sentences = _SENTENCE.findall(text or "")
+    return [s for s in can if s not in drawn
+            and any(REFUSE.search(x) and re.search(OTHER_SYSTEMS[s], x) for x in sentences)]
+
+
+# GUARD-07: what a 紫微 chart is not read for, and what 奇门 is not drawn for.
+OFF_LIMITS = {
+    "紫微斗数": {"寿命": r"寿命|寿元|短命|长寿|夭折|活不过|活多久|活到\d+", "疾病": r"疾病|得病|生病|重病|癌",
+                 "生育": r"不孕|生不出|生育|怀孕|生孩子|生男|生女", "子女好坏": r"子女.{0,3}(?:不孝|不好|没出息)",
+                 "婚姻成败": r"离婚|二婚|克夫|克妻|婚姻.{0,3}(?:失败|不成|不顺|破裂)|会不会离"},
+    "奇门遁甲": {"赌博下注": r"赌博|赌钱|赌球|赌场|下注|押注|博彩|彩票|买球",
+                 "伤人": r"报复|整人|害人|伤人|打人|弄死", "对抗执法": r"躲警察|抗法|袭警|对付警察|拒捕",
+                 "逃避法律责任": r"逃避(?:法律|追查|抓捕|责任)|销毁证据"},
+}
+_COMPASS = re.compile(r"往[东南西北]|朝[东南西北]|向[东南西北](?:走|去|出发|坐|找)|坐[东南西北]|"
+                      r"[东南西北]{1,2}(?:方|边|面|方向)(?:去|走|出发|坐|找|跑)")
+_HOLDS_BACK = re.compile(r"不看|不谈|不说|不碰|不管|不算|不能|不该|别拿|不拿|不用来|不排|不起局|看不了|算不了|"
+                         r"不会[看算排]|小瓜不会|我不会|医生|医院|律师|专业的人")    # not DECLINE: 「寿命不会太长」
+
+
+def off_limits(system: str, text: str) -> list[str]:
+    return [name for name, pattern in OFF_LIMITS.get(system, {}).items() if re.search(pattern, text or "")]
+
+
+def crossed_lines(text: str, drawn) -> list[str]:
+    """Sentences of a 紫微 or 奇门 answer that go where GUARD-07 says it may not: 寿命、疾病、生育、婚姻成败
+    from a 紫微 chart; betting, harm or the law, or a real-world direction (往东南走) from the 奇门 board."""
+    found = []
+    for sentence in _SENTENCE.findall(text or ""):
+        body = sentence.strip()
+        if not body or _HOLDS_BACK.search(body):
+            continue
+        if any(off_limits(system, body) for system in drawn) or ("奇门遁甲" in drawn and _COMPASS.search(body)):
+            found.append(body)
+    return found
+
+
+# What the answer says of a drawn chart, read back against the chart (charts.py's 「盘」).
+_ZW_STAR = ("紫微|天机|太阳|武曲|天同|廉贞|天府|太阴|贪狼|巨门|天相|天梁|七杀|破军|"
+            "文昌|文曲|左辅|右弼|天魁|天钺|禄存|天马|擎羊|陀罗|火星|铃星|地空|地劫")
+_ZW_PALACE = r"(命宫|兄弟宫|夫妻宫|子女宫|财帛宫?|疾厄宫?|迁移宫?|仆役宫?|交友宫|奴仆宫?|官禄宫?|事业宫|田宅宫?|福德宫?|父母宫)"
+_PALACE_ALIASES = {"交友": "仆役", "奴仆": "仆役", "事业": "官禄"}
+_AT = r"(?:坐落在|坐落于|坐在|坐守|落在|落入|落于|位于|坐|守|落|在|入|进|居)"
+_END = r"(?:宫|位|(?=[，。,.；;、！!？?\s（()）]|$))"
+_ZW_IN = re.compile(rf"({_ZW_STAR})星?{_AT}(?:你的?|了)?{_ZW_PALACE}")
+_ZW_HAS = re.compile(rf"{_ZW_PALACE}(?:里|中|内|里面)?(?:的主星是|主星是|主星为|坐的是|坐着|住着|有|是|坐|为)(?:一颗|颗)?"
+                     rf"((?:{_ZW_STAR})(?:(?:、|和|与|跟)(?:{_ZW_STAR}))*)")
+_ZW_SITS = re.compile(rf"({_ZW_STAR})星?(?:坐命|守命|入命)")
+_ZW_TRANSFORM = re.compile(rf"({_ZW_STAR})?化(禄|权|科|忌)星?(?:{_AT}(?:你的?|了)?{_ZW_PALACE})?")
+_ZW_BRANCH = re.compile(rf"(命宫|身宫)(?:在|落在|落于|落|位于|是|为|安在)[甲乙丙丁戊己庚辛壬癸]?([子丑寅卯辰巳午未申酉戌亥]){_END}")
+_ZW_BODY = re.compile(rf"身宫(?:在|落在|落于|落|位于|是|为|安在)(?:你的?)?{_ZW_PALACE}")
+_ZW_BUREAU = re.compile(r"([水木金土火][二三四五六])局")
+_ZW_MASTER = re.compile(rf"(命主|身主)星?(?:是|为)?({_ZW_STAR})")
+_QM_PALACE = rf"([坎坤震巽中乾兑艮离]){_END}"
+_QM_THING = r"([休生伤杜景死惊开]门|天[蓬任冲辅禽英芮柱心]|螣蛇|腾蛇|太阴|六合|白虎|玄武|九地|九天)"
+_QM_TO = r"(?:落在|落于|落入|加在|落|在|临|到|居|加)了?"
+_QM_JU = re.compile(r"([阴阳])遁([一二三四五六七八九])局")
+_QM_FU = re.compile(r"值符星?(?:是|为)?(天[蓬任冲辅禽英芮柱心])")
+_QM_FU_AT = re.compile(rf"值符星?(?:天[蓬任冲辅禽英芮柱心])?{_QM_TO}{_QM_PALACE}")
+_QM_SHI = re.compile(r"值使门?(?:是|为)?([休生伤杜景死惊开]门)")
+_QM_SHI_AT = re.compile(rf"值使(?:[休生伤杜景死惊开]门)?{_QM_TO}{_QM_PALACE}")
+_QM_AT = re.compile(rf"{_QM_THING}星?{_QM_TO}{_QM_PALACE}")
+OWN_WORDS = {"紫微斗数": _ZW_STAR + "|" + _ZW_PALACE, "奇门遁甲": _QM_THING}   # masked before other systems' words
+
+
+def _palace(name: str) -> str:
+    name = name if name == "命宫" else name.removesuffix("宫")
+    return _PALACE_ALIASES.get(name, name)
+
+
+def _ziwei_said(sentence: str) -> list[tuple]:
+    said: list[tuple] = [(("位", star), _palace(palace)) for star, palace in _ZW_IN.findall(sentence)]
+    for palace, stars in _ZW_HAS.findall(sentence):
+        said += [(("位", star), _palace(palace)) for star in re.split(r"、|和|与|跟", stars)]
+    said += [(("位", star), "命宫") for star in _ZW_SITS.findall(sentence)]
+    for star, kind, palace in _ZW_TRANSFORM.findall(sentence):
+        if star:
+            said.append((("化", kind), star))
+        if palace:
+            said.append((("化宫", kind), _palace(palace)))
+    said += [(f"{which}支", branch) for which, branch in _ZW_BRANCH.findall(sentence)]
+    said += [("身宫在", _palace(palace)) for palace in _ZW_BODY.findall(sentence)]
+    said += [("局", f"{bureau}局") for bureau in _ZW_BUREAU.findall(sentence)]
+    said += [(which, star) for which, star in _ZW_MASTER.findall(sentence)]
+    return said
+
+
+def _qimen_said(sentence: str) -> list[tuple]:
+    said: list[tuple] = [("局", f"{dun}遁{ju}局") for dun, ju in _QM_JU.findall(sentence)]
+    said += [("值符", star) for star in _QM_FU.findall(sentence)]
+    said += [("值符宫", palace) for palace in _QM_FU_AT.findall(sentence)]
+    said += [("值使", door) for door in _QM_SHI.findall(sentence)]
+    said += [("值使宫", palace) for palace in _QM_SHI_AT.findall(sentence)]
+    said += [(("位", thing.replace("腾蛇", "螣蛇")), palace) for thing, palace in _QM_AT.findall(sentence)]
+    return said
+
+
+def _ziwei_facts(board: dict) -> dict:
+    facts: dict = {"命宫支": board["命宫"], "身宫支": board["身宫"], "局": board["五行局"],
+                   "命主": board["命主"], "身主": board["身主"]}
+    for row in board["十二宫"]:
+        for star in row["主星"] + row["辅星"]:
+            facts[("位", star)] = row["宫"]
+        if row.get("身宫"):
+            facts["身宫在"] = row["宫"]
+    for item in board["四化"]:
+        star, kind, palace = re.fullmatch(r"(.+?)化(.)（(.+?)）", item).groups()
+        facts[("化", kind)] = star
+        facts[("化宫", kind)] = palace
+    return facts
+
+
+def _qimen_facts(board: dict) -> dict:
+    facts: dict = {key: board[key] for key in ("局", "值符", "值符宫", "值使", "值使宫")}
+    for row in board["九宫"]:
+        for part in ("星", "寄星", "门", "神"):
+            if row.get(part):
+                facts[("位", row[part])] = row["宫"]
+    return facts
+
+
+CHART_READERS = {"紫微斗数": (_ziwei_said, _ziwei_facts), "奇门遁甲": (_qimen_said, _qimen_facts)}
+_KEY_WORDS = {"命宫支": "命宫", "身宫支": "身宫", "身宫在": "身宫", "局": "局数", "命主": "命主", "身主": "身主",
+              "值符": "值符星", "值符宫": "值符落宫", "值使": "值使门", "值使宫": "值使落宫"}
+
+
+def _key_words(key) -> str:
+    if isinstance(key, tuple):
+        kind, name = key
+        return {"位": f"{name}所在的宫", "化": f"化{name}的星", "化宫": f"化{name}所在的宫"}[kind]
+    return _KEY_WORDS[key]
+
+
+def chart_facts(output: dict) -> list[dict]:
+    """A chart tool's result (charts.py) as facts: the main chart, then each candidate."""
+    reader = CHART_READERS[output["system"]][1]
+    return [reader(output["盘"])] + [reader(c["盘"]) for c in output.get("候选盘", [])]
+
+
+def chart_slips(text: str, charts: dict[str, list[list[dict]]]) -> list[tuple[str, str]]:
+    """(sentence, why) for each sentence that says of a drawn chart what is not on it, or what is on only one
+    of its candidate charts without the other (GUARD-07: only what the charts share is said flat)."""
+    slips = []
+    for sentence in _SENTENCE.findall(text or ""):
+        body = sentence.strip()
+        why = ""
+        for system, draws in charts.items():
+            said: dict = {}
+            for key, value in CHART_READERS[system][0](body):
+                said.setdefault(key, set()).add(value)
+            for key, values in said.items():
+                per_chart = [[board.get(key) for board in boards] for boards in draws]
+                known = {v for chart in per_chart for v in chart if v is not None}
+                if not known:
+                    continue
+                if values - known:
+                    why = f"{_key_words(key)}说成{'、'.join(sorted(values - known))}，盘上是{'、'.join(sorted(known))}"
+                elif len(draws) == 1 and len(known) > 1 and not all(v in body for v in known - values):
+                    main, *others = per_chart[0]
+                    why = (f"{_key_words(key)}主盘是{main or '没有'}，候选盘是{'、'.join(o or '没有' for o in others)}，"
+                           "只说了一边")
+                if why:
+                    break
+            if why:
+                break
+        if why:
+            slips.append((body, why))
+    return slips
 
 
 # --- reminders ------------------------------------------------------------------
@@ -545,12 +770,15 @@ class Review:
     late_verdict: bool = False
     invented: list[str] = field(default_factory=list)  # hexagrams never cast
     wrong_occasions: list[str] = field(default_factory=list)  # 「今天是重阳节」 when it is not
-    made_up: list[str] = field(default_factory=list)  # sentences with 紫微 / 奇门 / 八字… chart words
+    made_up: list[str] = field(default_factory=list)  # sentences with the chart words of a system not drawn
+    chart_slips: list[tuple[str, str]] = field(default_factory=list)  # (sentence, why): a drawn chart said wrong
+    crossed: list[str] = field(default_factory=list)  # GUARD-07: 紫微 on 寿命…, 奇门 on betting or 往东南走
+    refused: list[str] = field(default_factory=list)  # 「小瓜不会紫微」, now that it is drawn
 
     @property
     def problems(self) -> bool:
         return bool(self.wrong_hours or self.too_long or self.late_verdict or self.invented
-                    or self.wrong_occasions or self.made_up)
+                    or self.wrong_occasions or self.made_up or self.chart_slips or self.crossed or self.refused)
 
     def sent_back(self) -> list[str]:
         """What a send-back was for, for Reply.checks and the log."""
@@ -561,6 +789,12 @@ class Review:
             out.append("退回:节日「" + "」「".join(self.wrong_occasions) + "」")
         if self.made_up:
             out.append(f"退回:冒充别的术数「{self.made_up[0][:30]}」")
+        if self.chart_slips:
+            out.append(f"退回:盘面说错「{self.chart_slips[0][0][:30]}」")
+        if self.crossed:
+            out.append(f"退回:越界「{self.crossed[0][:30]}」")
+        if self.refused:
+            out.append("退回:说不会" + "、".join(self.refused))
         if self.wrong_hours:
             out.append("退回:时辰「" + "」「".join(self.wrong_hours) + "」")
         if self.late_verdict:
@@ -572,7 +806,8 @@ class Review:
 
     def let_through(self) -> list[str]:
         """Shape misses still there after the one send-back: the answer goes out anyway."""
-        return (["仍结论在后"] if self.late_verdict else []) + ([f"仍太长{self.too_long}字"] if self.too_long else [])
+        return ((["仍结论在后"] if self.late_verdict else []) + ([f"仍太长{self.too_long}字"] if self.too_long else [])
+                + (["仍说不会" + "、".join(self.refused)] if self.refused else []))
 
 
 def review(text: str, facts: Facts | None = None) -> Review:
@@ -585,7 +820,10 @@ def review(text: str, facts: Facts | None = None) -> Review:
                   verdict_late(repaired, facts.question),
                   invented_hexagrams(repaired, facts.hexagrams),
                   wrong_occasions(repaired, facts),
-                  made_up_charts(repaired, facts.question))
+                  made_up_charts(repaired, facts.question, facts.drawn),
+                  chart_slips(repaired, facts.charts),
+                  crossed_lines(repaired, facts.drawn),
+                  refused_to_draw(repaired, facts.can_draw, facts.drawn))
 
 
 def redo_message(result: Review, facts: Facts) -> str:
@@ -597,8 +835,25 @@ def redo_message(result: Review, facts: Facts) -> str:
         asks.append(f"回答里说了「{'」「'.join(result.wrong_occasions)}」，跟程序算的对不上。"
                     f"这几天的节日节气只有：{facts.occasion_listing()}。照这个说，没有就别提。")
     if result.made_up:
-        asks.append(f"回答里有「{result.made_up[0][:40]}」这样的话，那是紫微、奇门、六爻、风水排盘、八字或小六壬的盘面，"
-                    "小瓜不会这些，也没排过。只用梅花易数和黄历说；他要的是这些体系，就如实说不会。")
+        named = _system_hits("".join(result.made_up), CHART_WORDS) or ["别的术数"]
+        draw = [n for n in named if n in DRAWN_BY]
+        rest = [n for n in named if n not in draw]
+        say = f"回答里有「{result.made_up[0][:40]}」这样的话，那是{'、'.join(named)}的盘面，可这轮没排过。"
+        if draw:
+            say += f"要说先调 {'、'.join(DRAWN_BY[n] for n in draw)} 排出来，照工具结果说。"
+        if rest:
+            say += f"{'、'.join(rest)}在这里排不了：只用梅花易数和黄历说；他要的是这些，就如实说。"
+        asks.append(say)
+    if result.chart_slips:
+        sentence, why = result.chart_slips[0]
+        asks.append(f"回答里「{sentence[:40]}」跟排出来的盘对不上：{why}。盘上是：{facts.chart_listing()}。"
+                    "照工具给的「盘」说；有候选盘时，两张不一样的地方要两说，或者干脆不说。")
+    if result.crossed:
+        asks.append(f"「{result.crossed[0][:40]}」越界了：紫微不谈寿命、疾病、生育、婚姻成败；奇门的方位是盘上的，"
+                    "不说往哪个方向走；赌博、伤人、对抗执法的事都不看。这些如实说不看，别的照说。")
+    if result.refused:
+        asks.append(f"他要的{'、'.join(result.refused)}现在能排了，别说不会：调 "
+                    f"{'、'.join(DRAWN_BY[n] for n in result.refused)}（缺出生信息就先问），照工具结果说。")
     if result.wrong_hours:
         said = "」「".join(result.wrong_hours)
         asks.append(f"回答里的时辰跟程序算的黄历对不上：「{said}」。对他好的时辰只有这些：{facts.listing()}。"
@@ -611,17 +866,22 @@ def redo_message(result: Review, facts: Facts) -> str:
 
 
 def settle(result: Review, facts: Facts) -> Review:
-    """Still wrong after one redo: the sentences with a wrong 时辰, a made-up hexagram or a wrong
-    festival are taken out; code says the hours itself."""
+    """Still wrong after one redo: the sentences with a wrong 时辰, a made-up hexagram, a wrong festival,
+    another system's chart, a wrong reading of a drawn chart or a GUARD-07 crossing are taken out; code
+    says the hours itself, and the chart's gist when nothing is left."""
+    slipped = {sentence for sentence, _ in result.chart_slips}
     kept = [s for s in _SENTENCE.findall(result.text) if s.strip() not in result.wrong_hours
             and not any(name in named_hexagrams(s) for name in result.invented)
             and not any(claim in s for claim in result.wrong_occasions)
-            and s.strip() not in result.made_up]
+            and s.strip() not in result.made_up and s.strip() not in slipped and s.strip() not in result.crossed]
     text = "".join(kept).strip()
     fixes = list(result.fixes)
+    if result.chart_slips or result.crossed:
+        fixes += (["删掉说错的盘面"] if result.chart_slips else []) + (["删掉越界的话"] if result.crossed else [])
+        text = text or ("盘上是这样：" + facts.chart_listing() + "。" if facts.chart_listing() else "")
     if result.made_up:
         fixes.append("删掉冒充别的术数的话")
-        text = text or decline_line(asked_systems(facts.question))
+        text = text or honest_line(asked_systems(facts.question)) or "盘面得先排出来才能说，你再问我一次？"
     if result.wrong_occasions:
         fixes.append("删掉说错的节日")
         text = text or "这几天的节日节气：" + facts.occasion_listing() + "。"
@@ -633,4 +893,4 @@ def settle(result: Review, facts: Facts) -> Review:
     if result.invented:
         fixes.append("删掉编的卦")
         text = text or "这次还没起卦，小瓜不乱说卦。想看一件事，直接问我「能不能」就好。"
-    return Review(text, fixes, [], result.too_long, result.late_verdict, [])
+    return Review(text, fixes, [], result.too_long, result.late_verdict, [], refused=result.refused)

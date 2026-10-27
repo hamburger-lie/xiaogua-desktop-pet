@@ -59,8 +59,9 @@ def test_tool_errors_come_back_as_data():
 
 
 def test_every_schema_has_a_function():
-    from meihua.companion import fast
-    named = {s["name"] for s in tools.TOOL_SCHEMAS + tools.DAILY_TOOL_SCHEMAS + [fast.daily_schema()]}
+    from meihua.companion import charts, fast
+    named = {s["name"] for s in tools.TOOL_SCHEMAS + tools.DAILY_TOOL_SCHEMAS + [fast.daily_schema()]
+             + charts.schemas()}
     assert named == set(tools.TOOL_FUNCTIONS)
 
 
