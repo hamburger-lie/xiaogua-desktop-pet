@@ -42,6 +42,7 @@ METHOD_NAMES = {"meihua": "梅花易数", "xiaoliu-ren": "小六壬", "bazi": "�
 READING_TOOLS = {"daily_reading", "cast_now", "lookup_hexagrams", "validate_reading", "ziwei_chart", "qimen_chart",
                  "qimen_pick", "bazi_chart", "xiaoliu_chart", "space_check"}
 FOLLOW_UP_WINDOW = timedelta(minutes=30)
+KEPT_ON_FOLLOW_UP = ("daily_reading", "qimen_chart", "xiaoliu_chart")   # drawn from the moment: a follow-up keeps it
 
 PICK_HOURS = re.compile(r"几点|哪个时辰|什么时辰|哪个时候|什么时候去|挑(?:个|一个)?时辰|择时|选(?:个|一个)?时辰")
 XIAOLIU_CUE = re.compile(r"起(?:一|个)?课|算(?:一|个)?课|六宫")   # 「起一课」 is 六壬's word, not 梅花's
@@ -119,7 +120,7 @@ def pick(question: str, last: Route | None = None, now: datetime | None = None) 
     if MEIHUA_NAMED.search(text):
         return Route("named", "daily_reading", "meihua", "ROUTE-EXPLICIT", _say("meihua", "daily_reading", True), now)
     if last is not None and last.tool and last.at and now - last.at <= FOLLOW_UP_WINDOW and FOLLOW_UP.search(text):
-        again = "，传 follow_up=true" if last.tool in ("qimen_chart", "xiaoliu_chart") else ""
+        again = "，沿用上一卦（局、课），讲清楚就好" if last.tool in KEPT_ON_FOLLOW_UP else ""
         return Route("follow-up", last.tool, last.method, "XG-FOLLOW",
                      f"（系统）这句接着上一题，还用{METHOD_NAMES.get(last.method, '')}：调 {last.tool}{again}。", now)
     if XIAOLIU_CUE.search(text):

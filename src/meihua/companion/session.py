@@ -274,6 +274,11 @@ class Session:
     def _daily_reading(self, arguments: dict) -> dict:
         """起卦 + 查卦义 + 依据核对 for one concrete matter."""
         question = str(arguments.get("question") or "").strip()
+        now = _now()
+        last = self.last_moment.get("daily_reading")
+        if arguments.get("follow_up") and last and last[:2] == (self.chat.id, now.date().isoformat()):
+            # a follow-up on the same matter explains the 卦 it was given, not a new one for a later 时辰
+            return {**last[2], "status": "REUSED", "note": f"追问同一件事：沿用 {last[2]['cast']['起卦时间'][:5]} 起的这一卦"}
         cast = tools.cast_now(question)
         if cast.get("status") != "OK":
             return cast
@@ -282,9 +287,11 @@ class Session:
         gate = fast.check(fast.daily_record(cast, topic, question))
         first = ({"answer_first": "他问的是能不能 / 行不行：第一句先给结论（「能成」「悬」「先别签」），十来个字，卦放后面讲。"}
                  if harness.YES_NO.search(question) else {})
-        return {"status": "OK", "gate": gate["status"], **({"gate_errors": gate["errors"]} if gate["errors"] else {}),
-                **first, "topic": topic, "cast": fast.cast_brief(cast),
-                "meanings": {n: f"{m['pattern']}；{m['hint']}" for n, m in meanings.items()}}
+        result = {"status": "OK", "gate": gate["status"], **({"gate_errors": gate["errors"]} if gate["errors"] else {}),
+                  **first, "topic": topic, "cast": fast.cast_brief(cast),
+                  "meanings": {n: f"{m['pattern']}；{m['hint']}" for n, m in meanings.items()}}
+        self.last_moment["daily_reading"] = (self.chat.id, now.date().isoformat(), result)
+        return result
 
     # -- what the model sees ------------------------------------------------
     def long_term_blocks(self, now: datetime) -> list[str]:

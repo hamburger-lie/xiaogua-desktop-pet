@@ -61,7 +61,8 @@ def test_hours_outside_them_do_not(sentence):
 
 
 @pytest.mark.parametrize("sentence", [
-    "下午三点那个时辰别出门。", "早一点到，留一点余地最合适。", "十二时辰里今天酉时最好。", "你三点的面试能成。"])
+    "下午三点那个时辰别出门。", "早一点到，留一点余地最合适。", "十二时辰里今天酉时最好。", "你三点的面试能成。",
+    "现在三点多了，你收拾东西出门前把业务过一遍。"])
 def test_what_is_not_a_good_hour_claim_is_not_checked(sentence):
     assert harness.wrong_hours(sentence, facts_with("酉")) == []
 
@@ -157,7 +158,8 @@ def test_a_yes_no_question_answered_reason_first_is_caught(answer):
 
 @pytest.mark.parametrize("answer", [
     "今天能签，卦里是个「鼎」，立得稳。", "行，今天去签这事能成。", "明天不太适合理发，它是个破日。",
-    "下午去面试能成，但未必当场拍板。", "面试嘛，能成，早点到。", "先别签，条款再看两天。"])
+    "下午去面试能成，但未必当场拍板。", "面试嘛，能成，早点到。", "先别签，条款再看两天。",
+    "今天下午这场面试，成的面不小。", "势头是利你的，能谈出个结果。"])
 def test_a_verdict_up_front_passes(answer):
     assert not harness.verdict_late(answer, "今天去签合同行吗")
 

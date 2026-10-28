@@ -45,8 +45,11 @@ def test_a_ziwei_chart_comes_with_its_gist_the_decade_now_and_a_passing_gate():
     out = charts.ziwei_chart("用紫微斗数看看我的性格", PLAIN, "女", now=NOW)
     assert out["status"] == "OK" and out["gate"] == "PASS" and out["置信"] == "A" and "候选盘" not in out
     assert out["要点"].startswith("命宫在子（戊子），无主星（借对宫主星参看）；身宫在夫妻宫（戌）；火六局")
-    assert out["现在"] == "虚岁32，走福德宫这一限（26—35岁）"
-    assert "时辰" in out                                      # no longitude: says true solar time would be closer
+    assert "现在" not in out                                  # he did not ask about time: no 大限 line to spend words on
+    assert "30 分钟" in out["时辰"]                           # 10:30 is half an hour from 午时: a city could move it
+    # meanings for what leads only: 命宫 is empty, so its 对宫 迁移 (天同、太阴), 身宫 (天机、天梁) and the 四化
+    assert set(out["象义"]) == {"天同", "太阴", "天机", "天梁", "紫微", "化禄", "化权", "化科", "化忌"}
+    assert charts.ziwei_chart("这几年运势怎么样", PLAIN, "女", now=NOW)["现在"] == "虚岁32，走福德宫这一限（26—35岁）"
 
 
 def test_late_zi_gives_a_candidate_chart_and_what_differs():
@@ -158,6 +161,7 @@ def test_a_chart_hour_is_not_a_good_hour_claim():
     facts = harness.Facts()
     facts.days.append(harness.DayHours("今天", ["午"], ["午"]))
     assert harness.wrong_hours("你是子时出生的，适合安静做事。", facts) == []
+    assert harness.wrong_hours("你这盘是乙亥年、辛巳月、癸卯日、丁巳时，适合靠表达吃饭。", facts) == []   # a 时柱
     assert harness.wrong_hours("子时出门最合适。", facts) == ["子时出门最合适。"]
 
 
@@ -394,13 +398,20 @@ def test_a_bazi_chart_comes_with_its_structure_the_decade_now_and_a_passing_gate
     out = charts.bazi_chart("用八字看看我适合什么工作", BAZI_BIRTH, "男", 113.26, now=NOW)
     assert out["status"] == "OK" and out["gate"] == "PASS" and out["置信"] == "A"
     assert out["要点"] == "四柱 乙亥 辛巳 癸卯 丁巳；日主癸水，生在巳月（月令火）；天干透食神、偏印、偏财；巳亥六冲"
-    assert out["现在"] == "第3步大运戊寅（22—32岁）；2026年流年丙午（正财）"
+    assert "现在" not in out and out["盘"]["大运"] == "戊寅"     # not asked: no line, but still on the board
     assert "按出生地真太阳时 10:06" in out["出生"] and "时辰" not in out
-    assert {"偏财", "地支六冲"} <= set(out["象义"])
+    assert set(out["象义"]) == {"食神", "偏印", "偏财", "地支六冲"}          # the 十神 that show, not every hidden stem
+    asked = charts.bazi_chart("用八字看看我今年运势", BAZI_BIRTH, "男", 113.26, now=NOW)
+    assert asked["现在"] == "第3步大运戊寅（22—32岁）；2026年流年丙午（正财）"
+
+
+def test_the_city_note_comes_only_near_a_hour_line():
+    assert "时辰" not in charts.bazi_chart("q", "1995-05-12 10:00", now=NOW)       # an hour from either line
+    assert "15 分钟" in charts.bazi_chart("q", "1995-05-12 10:45", now=NOW)["时辰"]
 
 
 def test_without_a_sex_there_is_no_decade_and_without_a_time_it_asks():
-    out = charts.bazi_chart("q", BAZI_BIRTH, now=NOW)
+    out = charts.bazi_chart("看看我的大运", BAZI_BIRTH, now=NOW)
     assert out["现在"].endswith("大运要知道性别才排") and "大运" not in out["盘"]
     assert charts.bazi_chart("q", "1995年5月12日", now=NOW)["status"] == "NEED_INPUT"
 

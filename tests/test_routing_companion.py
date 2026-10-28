@@ -63,3 +63,21 @@ def test_a_follow_up_keeps_the_last_reading_in_the_same_conversation(tmp_path):
     assert "ziwei_chart" in {t["name"] for t in client.requests[1]["tools"]}
     session.new_chat()                                       # another conversation: nothing to follow
     assert agent.ask("那我的财帛宫呢").route == "chat·XG-CHAT"
+
+
+def test_a_follow_up_keeps_the_hexagram_its_matter_was_given(tmp_path):
+    client = ScriptedClient([[tool("daily_reading", question="今天下午去面试能成吗", topic="事业")],
+                             [text("能成，中间会卡一下。\n〔平静〕")],
+                             [tool("daily_reading", question="为什么这么说", topic="事业")],    # the model casts again…
+                             [text("卦里中间有个卡点。\n〔平静〕")]])
+    agent = XiaoguaAgent(client=client, session=Session(tmp_path))
+    first = agent.ask("今天下午去面试能成吗")
+    again = agent.ask("为什么这么说")
+    assert first.tool_calls == [{"tool": "daily_reading", "status": "OK"}]
+    assert again.route == "梅花易数·XG-FOLLOW" and again.tool_calls == [{"tool": "daily_reading", "status": "REUSED"}]
+
+
+def test_a_question_about_a_system_needs_no_verdict_first():
+    from meihua.companion import harness
+    assert not harness.verdict_late("半准半参考吧，看个大方向。", "八字准不准")
+    assert harness.verdict_late("半准半参考吧，看个大方向。", "这单签得成吗")

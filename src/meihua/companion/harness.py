@@ -232,11 +232,14 @@ _RANGE = re.compile(rf"(?P<p1>{_PERIOD})?(?P<a>{_NUM})(?:{_UNIT}|(?=[:：]))?{_M
 _POINT = re.compile(rf"(?P<p>{_PERIOD})?(?P<n>{_NUM})(?:{_UNIT}{_MIN.format('m', 'h')}|[:：](?P<m2>\d{{2}}))"
                     rf"(?![儿个])(?P<open>以前|之前|前|以后|之后|往后|过后|后)?")
 # A 时辰 by name; the look-arounds keep 孩子时、上午时间、尚未时、重申时、良辰时 out.
-_BRANCH = re.compile(r"(?<![孩儿日样面君弟男女妻父分种鸭帽房车本句圈脑上下尚从并还仍重延引良生诞小])"
+# 「丁巳时」 after a 干 is a 时柱 (八字), not a 时辰 to go at.
+_BRANCH = re.compile(r"(?<![孩儿日样面君弟男女妻父分种鸭帽房车本句圈脑上下尚从并还仍重延引良生诞小甲乙丙丁戊己庚辛壬癸])"
                      r"([子丑寅卯辰巳午未申酉戌亥])时(?![候间期代光机常段])")
 _NEGATIVE = re.compile(r"别|不要|避开|避一避|躲开|躲一躲|不好|不宜|不太好|不合适|凶|忌|冲你|犯冲")
 _CLAIM = re.compile(r"时辰|吉时|好时|时候|时段|钟点|出门|动身|最好|合适|适合|不错|吉")
 _CHART_MOMENT = re.compile(r"出生|生于|起局|起的局|这一局|排盘|排的盘")   # 「子时出生」: a chart's hour, not advice
+# 「现在三点多了」「已经五点半了」: the time it is, not a time to go at
+_NOW_SAID = re.compile(r"(?:现在|已经|这会儿|眼下)(?:都|才|快)?[零〇一二两三四五六七八九十\d]{1,3}点(?:多|半|钟)?了?")
 _SENTENCE = re.compile(r"[^。！？!?；;\n]+[。！？!?；;]*\n?|\n")
 
 
@@ -307,8 +310,8 @@ def time_claims(text: str) -> list[TimeClaim]:
         if not body or _NEGATIVE.search(body) or not _CLAIM.search(body) or _CHART_MOMENT.search(body):
             continue
         claim = TimeClaim(body)
-        masked = body
-        for m in _RANGE.finditer(body):
+        masked = _NOW_SAID.sub(lambda m: "□" * len(m.group()), body)
+        for m in _RANGE.finditer(masked):
             a_n, b_n = _number(m.group("a")), _number(m.group("b"))
             if a_n is None or b_n is None:
                 continue
@@ -368,7 +371,8 @@ DAILY_MAX_CHARS = 220          # asked for 60-150
 YES_NO = re.compile(r"(.)不\1|能.{0,10}吗|行吗|可以吗|适合.{0,8}吗|合适吗|好吗|成吗|顺吗|会.{0,8}吗|[能可]否|要不要|该不该")
 VERDICT = re.compile(r"能成|能行|能签|能去|能搬|能办|能过|可以|适合|合适|不太|不宜|不建议|别|不要|不行|不能|不成|成不了"
                      r"|没问题|稳|悬|缓|挪|往后放|值得|不值|去吧|签吧|^[行成能]|行[，。！,!]|成[，。！,!]"
-                     r"|有戏|没戏|够呛|难成|好成|把握|不如预期|顺利|不顺|不会")       # 「会…吗」: 不会
+                     r"|有戏|没戏|够呛|难成|好成|把握|不如预期|顺利|不顺|不会"       # 「会…吗」: 不会
+                     r"|偏顺|有利|利你|不利|成的面|胜算|大概率|多半|八成|能谈|能拿下|占上风")
 HEDGE = re.compile(r"不好说|说不准|难说|看情况|不一定|两说")
 _A_NOT_A = re.compile(r"(.)不\1")              # 成不成、行不行: the question said back, not an answer
 FIRST_CHARS = 20
@@ -383,6 +387,8 @@ def verdict_late(text: str, question: str) -> bool:
     characters, and not after a 「不好说」)."""
     if not question or not YES_NO.search(question):
         return False
+    if _CURIOUS.search(question) and _system_hits(question, OTHER_SYSTEMS):
+        return False                                   # 「八字准不准」: about a system, not a decision to make
     opening = _A_NOT_A.sub("", re.sub(r"\s", "", text))[:FIRST_CHARS]
     verdict, hedge = VERDICT.search(opening), HEDGE.search(opening)
     return verdict is None or (hedge is not None and hedge.start() < verdict.start())
@@ -965,7 +971,9 @@ def redo_message(result: Review, facts: Facts) -> str:
     if result.late_verdict:
         asks.append("他问的是能不能、行不行，第一句先给结论（「能签」「先别去」「不太合适」），十来个字，再说为什么。")
     if result.too_long:
-        asks.append(f"这条有 {result.too_long} 字，太长了，压到 {facts.max_chars * 2 // 3} 字左右，只留最要紧的。")
+        shape = ("只留一句结论、两处盘面依据（各一句）、一句建议，他没问的大运流年、别的宫位不提"
+                 if facts.drawn else "只留最要紧的")
+        asks.append(f"这条有 {result.too_long} 字，太长了，压到 {facts.max_chars * 2 // 3} 字左右：{shape}。")
     return "（系统）" + "".join(asks) + "把整条回答重说一遍，别的意思不变。"
 
 

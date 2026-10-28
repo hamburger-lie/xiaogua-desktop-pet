@@ -39,6 +39,8 @@ NUMERALS = "一二三四五六七八九"
 SEXES = {"男": "男", "女": "女", "男性": "男", "女性": "女", "male": "男", "female": "女"}
 _BIRTH = re.compile(r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})日?[ T]*(\d{1,2})[:：点](\d{1,2})")
 
+# Said in every chart result, right before the model writes; the harness still sends a runaway back.
+LENGTH = "整条四五句、180 字以内：第一句结论，再两处盘面依据各一句，最后一句建议；别的不展开"
 ZIWEI_BOUNDS = ("只排本命盘结构（《全书》卷二）：杂曜、神煞、星曜庙旺、流年流月没排，不说。"
                 "不谈寿命、疾病、生育、婚姻成败，不据盘评判别人（GUARD-07）。主星为空的宫借对宫主星参看，不说那一宫空白。")
 QIMEN_BOUNDS = ("只排时家转盘拆补局的盘面：不判格局吉凶，不用置闰法、飞盘。方位是盘上的方位，"
@@ -79,6 +81,24 @@ def _differences(main: dict, other: dict, rows: str, fields: tuple[str, ...], ke
         if changed:
             out.append(f"{mine[key]}：" + "；".join(changed))
     return out
+
+
+TIME_ASKED = re.compile(r"大运|大限|流年|今年|明年|这几年|未来|运势|运程|阶段|这十年|最近几年|什么时候")
+
+
+def _asks_time(question: str) -> bool:
+    """A 大运 / 大限 / 流年 line only when he asks about time: otherwise the answer spends itself on it."""
+    return bool(TIME_ASKED.search(question or ""))
+
+
+def _hour_line_note(clock: datetime, what: str) -> str | None:
+    """Within 45 minutes of a 时辰 boundary (odd hours) true solar time could move the hour: say so, once."""
+    since = (clock.hour * 60 + clock.minute - 60) % 120
+    gap = min(since, 120 - since)
+    if gap > 45:
+        return None
+    return (f"出生时刻离时辰交界只有 {gap} 分钟，按钟表时间定的{what}；知道出生城市（经度）按真太阳时能定得更准，"
+            "结尾半句提一下就行，他不说也照这个讲")
 
 
 def _said(value: Any) -> str:
@@ -155,7 +175,11 @@ def ziwei_chart(question: str, birth: str, sex: str, longitude: float | None = N
     for candidate in candidates:
         candidate["不同"] = _differences(board, candidate["盘"], "十二宫", ("命宫", "身宫", "五行局", "命主", "身主", "四化"), "宫")
     confidence = "B" if candidates else "A"
-    present = {s for row in board["十二宫"] for s in row["主星"]} | {f"化{k}" for k in result["chart"]["mutagen"]}
+    leading = [row for row in board["十二宫"] if row["宫"] == "命宫" or row.get("身宫")]
+    if not leading[0]["主星"]:                                    # 命宫 empty: read with its 对宫 (ZW-03)
+        leading += [row for row in board["十二宫"] if row["宫"] == "迁移"]
+    present = {s for row in leading for s in row["主星"]} | set(result["chart"]["mutagen"].values()) \
+        | {f"化{k}" for k in result["chart"]["mutagen"]}
     off = harness.off_limits("紫微斗数", question)
     claims = [{"text": _ziwei_gist(board), "evidence_ids": ["ZW-01", "ZW-03", "ZW-04"], "strength": 1,
                "conditions": ["限本命盘结构"], "reality_checks": ["对照他自己说的性格和经历"]}]
@@ -171,14 +195,17 @@ def ziwei_chart(question: str, birth: str, sex: str, longitude: float | None = N
            "依据": "《紫微斗数全书》卷二；大限从命宫起（通行起法，卷二原文从命前一宫起）",
            "出生": clock_note + f"，农历{timing['lunar']['year']}年{'闰' if timing['lunar']['is_leap_month'] else ''}"
                    f"{timing['lunar']['month']}月{timing['lunar']['day']}日{result['chart']['hour']}时",
-           "要点": _ziwei_gist(board), "现在": _decade_now(board, timing["lunar"]["year"], now or datetime.now(ZoneInfo(timezone))),
+           "要点": _ziwei_gist(board),
            "置信": confidence if not candidates else "B：有候选盘，两张一样的地方才说死，「不同」里的要两说",
            "盘": board, "象义": {name: text for name, text in meanings("ziwei-stars.md").items() if name in present},
-           "边界": ZIWEI_BOUNDS}
+           "边界": ZIWEI_BOUNDS, "篇幅": LENGTH}
     if candidates:
         out["候选盘"] = candidates
-    if longitude in (None, ""):
-        out["时辰"] = "按钟表时间定的时辰；他说了出生城市可带经度重排，按真太阳时更准"
+    if _asks_time(question):
+        out["现在"] = _decade_now(board, timing["lunar"]["year"], now or datetime.now(ZoneInfo(timezone)))
+    note = _hour_line_note(clock, "时辰") if longitude in (None, "") else None
+    if note:
+        out["时辰"] = note
     if off:
         out["不谈"] = f"他问到的{'、'.join(off)}紫微不看：如实说这部分不看，只说别的。"
     return out
@@ -238,7 +265,7 @@ def qimen_chart(question: str, timezone: str = DEFAULT_TIMEZONE, now: datetime |
            "要点": _qimen_gist(board),
            "置信": confidence if not candidates else "B：有候选盘，两张一样的地方才说死，「不同」里的要两说",
            "盘": board, "象义": {name: text for name, text in meanings("qimen-symbols.md").items() if name in present},
-           "边界": QIMEN_BOUNDS}
+           "边界": QIMEN_BOUNDS, "篇幅": LENGTH}
     if candidates:
         out["候选盘"] = candidates
     return out
@@ -411,7 +438,7 @@ def qimen_pick(question: str, matter: str, start: str | None = None, end: str | 
                    f"（第 {matters[matter]['出处']}）",
            "要点": gist, "排序": [label(r) for r in ranked], "时辰": rows,
            "象义": {name: text for name, text in meanings("qimen-symbols.md").items() if name in doors},
-           "边界": PICK_BOUNDS}
+           "边界": PICK_BOUNDS, "篇幅": LENGTH}
     notes = ([f"他的话照表归为{matter}，不是{filed}"] if filed else []) + (["已经过去的时辰没排"] if begin < now else [])
     if notes:
         out["说明"] = "；".join(notes)
@@ -504,17 +531,24 @@ def _bazi_from_pillars(question: str, pillars: list[str], today: datetime) -> di
                "conditions": ["限四柱结构", "四柱是他给的"], "reality_checks": ["对照他自己说的做事方式"]}]
     record = _record("bazi", "B", claims, _step(["BZ-01"]), ["四柱是他自己给的，历法边界没核对（BZ-05）"],
                      find_high_risk_hits(question or ""))
-    present = set(board["天干十神"].values()) | {g[1:] for v in board["藏干十神"].values() for g in v.split("、")}
+    present = set(board["天干十神"].values()) | _link_names(board)
     out = {"status": "OK", "system": "八字", **_gate(record),
            "依据": "子平四柱结构，照 references/bazi.md，不自动定旺衰用神", "出生": "他直接给的四柱，没有出生时间",
-           "要点": _bazi_gist(board), "现在": f"{flow['year']}年流年{flow['pillar']}（{flow['visible_ten_god']}）；"
-                                           "只给了四柱，大运要出生时间和性别才排",
+           "要点": _bazi_gist(board),
            "置信": "B：四柱是他给的，立春、节气、时辰这些边界没法核对", "盘": board,
-           "象义": {name: text for name, text in ten_god_meanings().items() if name in present}, "边界": BAZI_BOUNDS}
+           "象义": {name: text for name, text in ten_god_meanings().items() if name in present}, "边界": BAZI_BOUNDS, "篇幅": LENGTH}
+    if _asks_time(question):
+        out["现在"] = f"{flow['year']}年流年{flow['pillar']}（{flow['visible_ten_god']}）；只给了四柱，大运要出生时间和性别才排"
     off = harness.off_limits("八字", question)
     if off:
         out["不谈"] = f"他问到的{'、'.join(off)}八字不看：如实说这部分不看，只说别的。"
     return out
+
+
+def _link_names(board: dict) -> set[str]:
+    """「巳亥六冲」 -> 「地支六冲」: the 合冲 notes in references/bazi.md, for what the chart has."""
+    return {name for link in board["合冲"] for name in ("天干五合", "地支六合", "地支六冲", "地支三合")
+            if link.endswith(name[-2:])}
 
 
 def bazi_chart(question: str, birth: str = "", sex: str = "", longitude: float | None = None,
@@ -555,9 +589,7 @@ def bazi_chart(question: str, birth: str = "", sex: str = "", longitude: float |
         candidate["盘"]["流年十神"] = analyze_bazi.ten_god(candidate["盘"]["日主"][0], board["流年"][0])
         candidate["不同"] = _differences_flat(board, candidate["盘"])
     confidence = "B" if candidates else "A"
-    present = set(board["天干十神"].values()) | {g[1:] for v in board["藏干十神"].values() for g in v.split("、")} \
-        | {name for link in board["合冲"] for name in ("天干五合", "地支六合", "地支六冲", "地支三合")
-           if link.endswith(name[-2:])}
+    present = set(board["天干十神"].values()) | _link_names(board)      # the 十神 that show, not every hidden stem
     claims = [{"text": _bazi_gist(board), "evidence_ids": ["BZ-01", "BZ-02"], "strength": 1,
                "conditions": ["限四柱结构"], "reality_checks": ["对照他自己说的做事方式"]}]
     if board["合冲"] != ["没有"]:
@@ -578,14 +610,16 @@ def bazi_chart(question: str, birth: str = "", sex: str = "", longitude: float |
     out = {"status": "OK", "system": "八字", **_gate(record),
            "依据": "子平四柱：立春换年、十二节换月、23 点子初换日；结构照 references/bazi.md，不自动定旺衰用神",
            "出生": clock_note, "要点": _bazi_gist(board),
-           "现在": now_line,
            "置信": confidence if not candidates else "B：有候选盘，两张一样的地方才说死，「不同」里的要两说",
            "盘": board, "象义": {name: text for name, text in ten_god_meanings().items() if name in present},
-           "边界": BAZI_BOUNDS}
+           "边界": BAZI_BOUNDS, "篇幅": LENGTH}
     if candidates:
         out["候选盘"] = candidates
-    if lon is None:
-        out["时辰"] = "按钟表时间定的时柱；他说了出生城市可带经度重排，按真太阳时更准"
+    if _asks_time(question):
+        out["现在"] = now_line
+    note = _hour_line_note(clock, "时柱") if lon is None else None
+    if note:
+        out["时辰"] = note
     off = harness.off_limits("八字", question)
     if off:
         out["不谈"] = f"他问到的{'、'.join(off)}八字不看：如实说这部分不看，只说别的。"
@@ -651,7 +685,7 @@ def xiaoliu_chart(question: str, timezone: str = DEFAULT_TIMEZONE, now: datetime
            "盘": {"课宫": palace},
            "象义": {name: meaning for name, meaning in palace_meanings().items()
                     if name == palace or any(c["盘"]["课宫"] == name for c in candidates)},
-           "边界": XIAOLIU_BOUNDS}
+           "边界": XIAOLIU_BOUNDS, "篇幅": LENGTH}
     if candidates:
         out["候选盘"] = candidates
     return out
@@ -708,7 +742,7 @@ def space_check(question: str, space: str = "", facing: str = "", problems: list
            "依据": "SPACE-01（protocols/action-space.md）：先现实环境，后传统象征；清单见 references/space-checks.md",
            "要点": gist, "盘": {"空间": space or "没说", "朝向": facing or "没说"},
            "现实环境": [{"项": name, **{k: items[name][k] for k in ("先看", "能做", "别做")}} for name in picked],
-           "边界": SPACE_BOUNDS}
+           "边界": SPACE_BOUNDS, "篇幅": LENGTH}
     if traditional:
         out["传统象征"] = traditional
     if missing:

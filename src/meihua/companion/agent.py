@@ -224,6 +224,9 @@ class XiaoguaAgent:
                         output = {"status": "NOT_ROUTED", "note": f"这题由程序定为{self._route.label}，这个工具这轮不用。"}
                         checks.append(f"拦下:{block.name}")
                     else:
+                        if self._route is not None and self._route.kind == "follow-up" \
+                                and block.name in routing.KEPT_ON_FOLLOW_UP:
+                            arguments = {**arguments, "follow_up": True}      # the same matter: its 卦 / 局 / 课, by code
                         output = self._run_tool(block.name, arguments)
                     calls.append({"tool": block.name, "status": output.get("status")})
                     if block.name == "cast_now" and output.get("status") == "OK":
