@@ -186,10 +186,10 @@ class OpenAICompatClient:
         return payload
 
     def create(self, *, model: str, messages: list, system=None, tools=None, max_tokens: int = 1024,
-               **_anthropic_only) -> SimpleNamespace:
+               timeout: float | None = None, **_anthropic_only) -> SimpleNamespace:
         payload = self._payload(model, messages, system, tools, max_tokens)
         response = self._post(f"{self.base_url}/chat/completions", headers=self._headers(),
-                              json=payload, timeout=self.timeout)
+                              json=payload, timeout=timeout or self.timeout)
         if response.status_code >= 400:
             raise ProviderError(response.status_code, _error_message(response))
         return translate_response(response.json())

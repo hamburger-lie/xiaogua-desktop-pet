@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import harness, routing
+from . import harness, routing, understand
 from .config import DEFAULT_MODEL as _CONFIG_DEFAULT
 from .charts import CHART_TOOLS
 from .fast import FAST_TOOLS
@@ -120,6 +120,7 @@ class XiaoguaAgent:
     history: list[dict[str, Any]] = field(default_factory=list)
     session: Any = None          # companion.session.Session: the conversation, today's 黄历, the memory
     voice_style: str = "平衡"    # 直白 / 平衡 / 玄一点 (settings)
+    understands: bool = False    # code can't tell the reading -> one short call reads his words (understand.py)
 
     def _request(self, messages: list[dict[str, Any]], on_text=None) -> Any:
         # Layer 1 (fixed, cached) then layer 2 (style + today + what 小瓜 remembers, from code).
@@ -186,7 +187,11 @@ class XiaoguaAgent:
         else:
             earlier = self.history[-2 * HISTORY_TURNS:]
         asked_for = harness.asked_systems(text)            # named: 紫微、奇门、八字… drawn; 六爻、飞星: not done
-        self._route = routing.pick(text, self._last_route())     # which reading, decided by code (routing.py)
+        read = (lambda question, last: understand.read(self.client, self.model, question, last)) \
+            if self.understands else None
+        self._route = routing.pick(text, self._last_route(), read=read)   # which reading, decided by code (routing.py)
+        if self._route.form is not None or self._route.notes:
+            _log.info("听懂：%s %s", self._route.form, "；".join(self._route.notes))
         question = [{"type": "text", "text": text}]
         if self._route.hint:
             question.append({"type": "text", "text": self._route.hint})
@@ -334,14 +339,14 @@ def make_agent(model: str | None = None, api_key: str | None = None, provider: s
     if preset.kind == "anthropic":
         import anthropic
 
-        return XiaoguaAgent(client=anthropic.Anthropic(api_key=api_key), model=model or DEFAULT_MODEL)
+        return XiaoguaAgent(client=anthropic.Anthropic(api_key=api_key), model=model or DEFAULT_MODEL, understands=True)
     from .openai_compat import OpenAICompatClient
 
     # Fast by default: a vendor's think-first mode is switched off unless 深度思考 is on in the settings.
     client = OpenAICompatClient(base_url or preset.base_url, api_key, vision=preset.vision,
                                 token_param=preset.token_param, extra=None if deep_thinking else preset.extra)
     return XiaoguaAgent(client=client, model=model or (preset.models[0] if preset.models else ""),
-                        thinking=False, effort=None)
+                        thinking=False, effort=None, understands=True)
 
 
 def check_connection(api_key: str | None, model: str, provider: str = "anthropic",
