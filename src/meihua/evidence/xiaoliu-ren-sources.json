@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "method": "xiaoliu-ren",
+  "verified_on": "2026-09-22",
+  "purpose": "将可核查的传本文字、由文字推导的算法和本项目约定分开，供小六壬证据层读取。",
+  "sources": [
+    {
+      "id": "XL-W1",
+      "kind": "scanned_witness",
+      "title": "萬寶玉匣記",
+      "section": "卷下·李淳風六壬時課",
+      "responsibility_statement": "嵩山居士校閱；‘李淳風’为篇题署名，不能据此认定历史作者。",
+      "publisher": "上海鴻文書局",
+      "publication_year": 1936,
+      "holding_identifier": "中国国家图书馆 NLC416-15jh007692-106641",
+      "file_page_numbers_1_based": [66, 67],
+      "printed_page_labels": ["卷下二十五", "卷下二十六"],
+      "catalogue_url": "https://commons.wikimedia.org/wiki/File:NLC416-15jh007692-106641_%E8%90%AC%E5%AF%B6%E7%8E%89%E5%8C%A3%E8%A8%98.pdf",
+      "scan_url": "https://upload.wikimedia.org/wikipedia/commons/9/95/NLC416-15jh007692-106641_%E8%90%AC%E5%AF%B6%E7%8E%89%E5%8C%A3%E8%A8%98.pdf",
+      "verification": "scan_visually_checked",
+      "supports": ["XL-R1", "XL-R2", "XL-R3", "XL-R4"],
+      "limits": "只证明1936年此传本载有这些文字；不证明唐代成书、李淳風亲作或占断效验。"
+    },
+    {
+      "id": "XL-C1",
+      "kind": "collection_catalogue",
+      "title": "玉匣記通書廣集",
+      "section": "上卷目录·李淳風六壬時課",
+      "holding_description": "清季福州集新堂藏版；国家数位典藏项目书目记录。",
+      "url": "https://shanshu.teldap.tw/gbs/408",
+      "verification": "catalogue_checked_only",
+      "supports": ["XL-R0"],
+      "limits": "仅确认另一传本目录中有此篇名；未用该馆藏书影核对算法正文。目录所载序年不得当作刊年。"
+    }
+  ],
+  "rules": [
+    {
+      "id": "XL-R0",
+      "statement": "《玉匣記通書廣集》另一馆藏目录列有‘李淳風六壬時課’。",
+      "evidence_type": "catalogue_only",
+      "source_ids": ["XL-C1"],
+      "use": "传本存在性的旁证，不据此推断正文措辞或年代。"
+    },
+    {
+      "id": "XL-R1",
+      "statement": "六宫按大安、留連、速喜、赤口、小吉、空亡排列。",
+      "evidence_type": "directly_observed_in_scan",
+      "source_ids": ["XL-W1"],
+      "locator": "PDF页66–67；卷下二十五–二十六；六宫标题。"
+    },
+    {
+      "id": "XL-R2",
+      "statement": "从大安起正月，在月宫起初一，在日宫起子时，顺数至所问时支；三个起点均计为一。",
+      "evidence_type": "direct_text_plus_example_inference",
+      "source_ids": ["XL-W1"],
+      "locator": "PDF页66；卷下二十五；‘其法’段。",
+      "short_transcription": "每從大安上起正月，月上起日，日上起時。",
+      "inference_note": "起点计一由所载三月初五日辰时的落宫例核对；原文没有现代索引公式。"
+    },
+    {
+      "id": "XL-R3",
+      "statement": "传本例题：三月初五日辰时，落小吉。",
+      "evidence_type": "directly_observed_in_scan",
+      "source_ids": ["XL-W1"],
+      "locator": "PDF页66；卷下二十五；‘假如’段。",
+      "example_input": {"lunar_month": 3, "lunar_day": 5, "hour_branch": "辰"},
+      "example_output": "小吉",
+      "modern_equivalent_index": "((month - 1) + (day - 1) + (hour_branch_ordinal - 1)) % 6",
+      "formula_status": "由传本顺数步骤及例题推导，不是原文公式。"
+    },
+    {
+      "id": "XL-R4",
+      "statement": "六宫各有吉凶、行人、求财、官事等传统占语；只能据此说明传本象义，不能据此断定现实事件。",
+      "evidence_type": "directly_observed_in_scan",
+      "source_ids": ["XL-W1"],
+      "locator": "PDF页66–67；卷下二十五–二十六；六宫歌诀。",
+      "lexicon_only": {
+        "大安": ["安稳", "守持"],
+        "留连": ["迟滞", "缓行"],
+        "速喜": ["喜讯", "快进"],
+        "赤口": ["口舌", "争执"],
+        "小吉": ["和合", "渐顺"],
+        "空亡": ["落空", "信息稀少"]
+      },
+      "limit": "上述词是对传本文字的概括，不是原文逐字摘录，也不是预测准确率证据。"
+    }
+  ],
+  "project_conventions_not_established_by_witness": [
+    {"id": "XL-P1", "item": "闰月沿用同一农历月数字", "location": "references/xiaoliu-ren.md；engines/cast_xiaoliu_ren.py"},
+    {"id": "XL-P2", "item": "公历转农历所用ICU历法、时区与换日边界", "location": "references/xiaoliu-ren.md；engines/cast_xiaoliu_ren.py"},
+    {"id": "XL-P3", "item": "把宫象转成找物、关系、事业等现代行动建议", "location": "references/xiaoliu-ren.md；evidence/xiaoliu-ren.md"},
+    {"id": "XL-P4", "item": "A/B计算置信等级及小六壬的产品路由条件", "location": "evidence/xiaoliu-ren.md；router/method-routing.md"}
+  ],
+  "unverified_questions": [
+    "李淳風是否为原作者及此法的最早可证年代",
+    "1936年本与更早传本的正文异同",
+    "闰月与子初换日的该传本专门规则",
+    "六宫占断的现实预测效度"
+  ],
+  "usage_boundary": "计算规则可引用XL-R1至XL-R3；解释只能把XL-R4作为传统语汇并结合现实证据条件化表述。不得把篇题署名、目录、取模公式、产品约定或传本占语说成经实证验证的预测事实。"
+}

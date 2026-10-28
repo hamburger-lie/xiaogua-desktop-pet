@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import harness
+from . import harness, routing
 from .config import DEFAULT_MODEL as _CONFIG_DEFAULT
 from .charts import CHART_TOOLS
 from .fast import FAST_TOOLS
@@ -60,9 +60,9 @@ reading_record 照这个格式，字段名一个都不能改（claims 和 action
 strength 用 1；用 2 要至少两个证据编号，并且 conditions 是非空的字符串列表。证据编号用 MH-01 本互变、MH-02 体用、MH-03 旺衰、MH-05 场景分类、TIME-01 时机出行，再加对应的协议：WORK-01 事业跳槽、COOP-01 合作、MONEY-01 钱财、REL-01～REL-05 感情关系、GUARD-01～GUARD-06 安全边界。actions 要可逆、低风险，reality_anchor 写现实里能核对的一步。
 回答时卦名可以说，体用、五行、比和这些词不说，翻成人话（「你跟这事气场顺」「对方压你一头」）。
 
-## 紫微和奇门（他点名才用）
-他点名要紫微斗数（看命盘、性格、做事方式、人生阶段），调 ziwei_chart：要公历出生日期、几点几分和性别，缺哪样问哪样，不猜；知道出生城市就带经度。点名要奇门遁甲看一件近期的事，调 qimen_chart，追问同一件事传 follow_up=true。没点名不主动用；问一件事能不能成，还是 daily_reading 起梅花卦。
-盘面只照工具结果说：命宫、主星、四化、局、值符值使照「盘」和「要点」，星和门的意思照「象义」讲，不凭记忆；工具没给的杂曜、庙旺、流年、格局吉凶不说。有「候选盘」时，两张一样的地方才说死，「不同」里的要两说。紫微不谈寿命、疾病、生育、婚姻成败；奇门盘上的方位不是他身边的方向，不说「往东南走」。
+## 紫微、奇门、八字、小六壬（他点名才用）
+他点名要紫微斗数（看命盘、性格、做事方式、人生阶段），调 ziwei_chart：要公历出生日期、几点几分和性别，缺哪样问哪样，不猜；知道出生城市就带经度。点名要八字，调 bazi_chart：要公历出生日期和几点几分，问大运才要性别。点名要奇门遁甲看一件近期的事，调 qimen_chart；要用奇门挑哪个时辰去办事（「几点去」「哪个时辰搬」），调 qimen_pick，时间段按他说的换算，回答先说排在最前的时辰，再半句说按门奇会合和得地排、没看得时（节令衰旺）。点名要小六壬，调 xiaoliu_chart；qimen_chart 和 xiaoliu_chart 追问同一件事都传 follow_up=true。问房间、家里的风水，调 space_check：先说现实环境（采光、通风、潮湿这些，照工具的「先看」「能做」），传统说法放最后单列一句，只在他给了朝向时说。没点名不主动用；问一件事能不能成，还是 daily_reading 起梅花卦。
+盘面只照工具结果说：命宫、主星、四化、局、值符值使、四柱、日主、十神、大运、课宫照「盘」和「要点」，意思照「象义」讲，不凭记忆；工具没给的杂曜、庙旺、格局吉凶、旺衰用神不说，也不说缺什么补什么。有「候选盘」时，两张一样的地方才说死，「不同」里的要两说。紫微、八字不谈寿命、疾病、生育、婚姻成败；奇门盘上的方位不是他身边的方向，不说「往东南走」；小六壬找东西不说是谁拿的。
 说法照样像熟人聊天：第一句先说盘里最突出的一点（「你是巨门坐命，爱较真」），再两三句依据，术语顺手翻成人话，整条 100～180 字。
 
 ## 边界
@@ -96,6 +96,7 @@ class Reply:
     error: str | None = None
     mood: str | None = None      # 开心 / 加油 / 担心 / 犹豫 / 平静: the answer's own tag, for 小瓜's motion
     checks: list[str] = field(default_factory=list)   # what the harness found and fixed (harness.py)
+    route: str | None = None     # 日常: the reading code chose for the question (routing.py), 「八字·ROUTE-BIRTH」
 
 
 MOODS = ("开心", "加油", "担心", "犹豫", "平静")
@@ -125,6 +126,9 @@ class XiaoguaAgent:
         tools = DAILY_TOOL_SCHEMAS + daily_tool_schemas()
         if self.session is not None:
             tools = [t for t in tools if t["name"] not in SESSION_HIDDEN]
+        route = getattr(self, "_route", None)
+        if route is not None:                           # only the reading the route chose (routing.py)
+            tools = [t for t in tools if route.offered(t["name"])]
         dynamic = [VOICE_STYLES.get(self.voice_style, VOICE_STYLES["平衡"]),
                    self.session.daily_context_text() if self.session is not None else daily_context_text(None)]
         system = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
@@ -181,10 +185,11 @@ class XiaoguaAgent:
             earlier = self.session.recent_daily_messages()     # this conversation, within a budget
         else:
             earlier = self.history[-2 * HISTORY_TURNS:]
-        asked_for = harness.asked_systems(text)            # 紫微、奇门 drawn (charts.py); 八字、六爻…: not done
+        asked_for = harness.asked_systems(text)            # named: 紫微、奇门、八字… drawn; 六爻、飞星: not done
+        self._route = routing.pick(text, self._last_route())     # which reading, decided by code (routing.py)
         question = [{"type": "text", "text": text}]
-        if asked_for:
-            question.append({"type": "text", "text": harness.ask_hint(asked_for)})
+        if self._route.hint:
+            question.append({"type": "text", "text": self._route.hint})
         messages = earlier + [{"role": "user", "content": question}]
 
         calls: list[dict[str, Any]] = []
@@ -215,7 +220,11 @@ class XiaoguaAgent:
                     arguments = block.input if isinstance(block.input, dict) else json.loads(block.input)
                     if on_step is not None:
                         on_step(block.name)
-                    output = self._run_tool(block.name, arguments)
+                    if self._route is not None and not self._route.offered(block.name):
+                        output = {"status": "NOT_ROUTED", "note": f"这题由程序定为{self._route.label}，这个工具这轮不用。"}
+                        checks.append(f"拦下:{block.name}")
+                    else:
+                        output = self._run_tool(block.name, arguments)
                     calls.append({"tool": block.name, "status": output.get("status")})
                     if block.name == "cast_now" and output.get("status") == "OK":
                         cast_done = True
@@ -266,7 +275,7 @@ class XiaoguaAgent:
                                                               "text": harness.redo_message(checked, facts)}]})
                 continue
             if checked.wrong_hours or checked.invented or checked.wrong_occasions or checked.made_up \
-                    or checked.chart_slips or checked.crossed:
+                    or checked.chart_slips or checked.crossed or checked.space_shape == "没说现实环境":
                 checked = harness.settle(checked, facts)
             answer, said_back = harness.say_reminders(checked.text, reminders)
             answer, said_no = harness.say_cannot(answer, asked_for)
@@ -276,9 +285,28 @@ class XiaoguaAgent:
             if cancel is not None and cancel.is_set():
                 return Reply("", False, calls, "cancelled")
             self._remember(text, answer)
+            if self._route is not None:
+                _log.info("路由：%s", self._route.label)
+                self._keep_route(self._route)
             return Reply(answer, validated, calls,
-                         None if validated else "解读未通过证据闸门，已停止追问", mood, checks)
+                         None if validated else "解读未通过证据闸门，已停止追问", mood, checks,
+                         self._route.label if self._route is not None else None)
         return Reply("小瓜这次想得太久了，换个问法再试一次？", False, calls, "达到最大轮次")
+
+    def _last_route(self) -> routing.Route | None:
+        """The last 日常 turn's route, in this conversation: a follow-up keeps its reading."""
+        if self.session is not None:
+            kept = getattr(self.session, "last_route", None)
+            return kept[1] if kept and kept[0] == self.session.chat.id else None
+        return getattr(self, "_kept_route", None)
+
+    def _keep_route(self, route: routing.Route) -> None:
+        if route.tool is None:
+            return                                  # a 黄历 or chat turn leaves the last reading as it was
+        if self.session is not None:
+            self.session.last_route = (self.session.chat.id, route)
+        else:
+            self._kept_route = route
 
     def _remember(self, question: str, answer: str) -> None:
         if self.session is not None:

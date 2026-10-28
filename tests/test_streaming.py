@@ -80,7 +80,7 @@ def test_only_the_gated_answer_stays_streamed():
     def on_discard():
         shown.clear()
 
-    reply = agent.ask("说说面试", on_text=on_text, on_discard=on_discard)
+    reply = agent.ask("面试能成吗", on_text=on_text, on_discard=on_discard)
     assert reply.validated is True and reply.text == "能成，早点到。"
     assert "".join(shown) == reply.text                  # what is left on screen is the answer
 

@@ -119,6 +119,10 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "daily_reading": lambda **kw: _session_tool("daily_reading", kw),
     "ziwei_chart": lambda **kw: _session_tool("ziwei_chart", kw),
     "qimen_chart": lambda **kw: _session_tool("qimen_chart", kw),
+    "qimen_pick": lambda **kw: _session_tool("qimen_pick", kw),
+    "bazi_chart": lambda **kw: _session_tool("bazi_chart", kw),
+    "xiaoliu_chart": lambda **kw: _session_tool("xiaoliu_chart", kw),
+    "space_check": lambda **kw: _session_tool("space_check", kw),
 }
 
 

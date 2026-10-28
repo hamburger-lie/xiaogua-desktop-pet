@@ -202,7 +202,8 @@ AMBIENT_MS = 33
 STEP_MOTIONS = {
     "cast_now": "起卦", "lookup_hexagrams": "翻书", "validate_reading": "思考",
     "almanac_day": "翻书", "almanac_pick_days": "翻书", "daily_reading": "起卦",
-    "ziwei_chart": "起卦", "qimen_chart": "起卦",
+    "ziwei_chart": "起卦", "qimen_chart": "起卦", "qimen_pick": "翻书", "bazi_chart": "起卦", "xiaoliu_chart": "起卦",
+    "space_check": "看图",
 }
 BUSY_LOOP = "思考"            # between steps, and after a one-shot step motion
 CAST_LOOP = "卦中"            # … once this answer has cast a reading: 小瓜 stays at the scroll
@@ -272,10 +273,14 @@ class OfflineAgent:
         systems = asked_systems(text or "")
         if "奇门遁甲" in systems:
             answer, calls = self._qimen(text)
+        elif "小六壬" in systems:
+            answer, calls = self._xiaoliu(text)
         elif systems:
-            answer = honest_line([s for s in systems if s not in DRAWN_BY])     # 八字、六爻…: not done here either
-            if "紫微斗数" in systems:
-                answer += "离线时排不了紫微斗数：得从你的话里读出出生日期和时间，接上模型才行。"
+            here = [s for s in systems if s in DRAWN_BY]
+            answer = honest_line([s for s in systems if s not in here])          # 六爻、飞星: not done here either
+            need = {"风水": ("看", "房间的情况")}
+            answer += "".join(f"离线时{need.get(s, ('排',))[0]}不了{s}：得从你的话里读出"
+                              f"{need.get(s, ('', '出生日期和时间'))[1]}，接上模型才行。" for s in here)
             calls = []
         elif YES_NO.search(text or ""):
             cast = cast_now(text)
@@ -297,6 +302,20 @@ class OfflineAgent:
         if self.session is not None:
             self.session.record_daily_turn(text, "（离线）")
         return Reply(answer, True, calls)
+
+    def _xiaoliu(self, text):
+        from .charts import xiaoliu_chart
+
+        result = (self.session.run_daily_tool("xiaoliu_chart", {"question": text}) if self.session is not None
+                  else xiaoliu_chart(text))
+        calls = [{"tool": "xiaoliu_chart", "status": result.get("status")}]
+        if result.get("status") != "OK":
+            return result.get("error") or "这课没起出来。", calls
+        palace = result["盘"]["课宫"]
+        line = f"离线小六壬（{result['起课']}）：{result['要点']}。{result['象义'][palace]['象义']}"
+        if result.get("候选盘"):
+            line += "\n这一刻落在换日的口径分歧处，另有候选课，只当参考。"
+        return line + "\n\n接上模型后，小瓜能按你的事细讲。", calls
 
     def _qimen(self, text):
         from .charts import qimen_chart
@@ -2022,8 +2041,12 @@ def selftest(out_path: str) -> int:
         report["almanac"] = run_tool("almanac_day", {}).get("status")
         report["ziwei"] = run_tool("ziwei_chart", {"question": "自检", "birth": "1995-05-12 10:30", "sex": "女"}).get("gate")
         report["qimen"] = run_tool("qimen_chart", {"question": "自检"}).get("gate")
-        if {report["ziwei"], report["qimen"]} != {"PASS"}:
-            raise RuntimeError(f"紫微 / 奇门没排出来：{report['ziwei']} / {report['qimen']}")
+        report["bazi"] = run_tool("bazi_chart", {"question": "自检", "birth": "1995-05-12 10:30", "sex": "女"}).get("gate")
+        report["xiaoliu"] = run_tool("xiaoliu_chart", {"question": "自检"}).get("gate")
+        report["space"] = run_tool("space_check", {"question": "自检：卧室潮", "space": "卧室", "facing": "北"}).get("gate")
+        drawn = {name: report[name] for name in ("ziwei", "qimen", "bazi", "xiaoliu", "space")}
+        if set(drawn.values()) != {"PASS"}:
+            raise RuntimeError(f"排盘没排出来：{drawn}")
         report["providers"] = len(providers.PROVIDERS)
         QApplication.instance() or QApplication(sys.argv[:1])
         motions = load_motions(64)

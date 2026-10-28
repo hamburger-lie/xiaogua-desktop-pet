@@ -21,7 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-from solar_clock import parse_local_datetime
+from cast_bazi import parse_local_datetime
 from result_contract import calculation_record
 
 STEMS = "甲乙丙丁戊己庚辛壬癸"

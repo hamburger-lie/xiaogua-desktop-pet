@@ -21,7 +21,7 @@ import sys
 from datetime import date, datetime, timedelta
 
 import lunar
-from solar_clock import apparent_solar_clock, parse_local_datetime
+from cast_bazi import apparent_solar_clock, parse_local_datetime
 from result_contract import calculation_record
 
 STEMS = "甲乙丙丁戊己庚辛壬癸"

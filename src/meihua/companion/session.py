@@ -116,7 +116,7 @@ OCCASION_LINES = {"春节": "爆竹声中一岁除，春风送暖入屠苏。", 
 
 
 def daily_tool_schemas() -> list[dict[str, Any]]:
-    """小瓜's own tools besides the 黄历: the one-call reading, 紫微 and 奇门 when named, the 属相, the
+    """小瓜's own tools besides the 黄历: the one-call reading, 紫微、奇门、八字、小六壬、风水 when named, the 属相, the
     long-term memory."""
     return [fast.daily_schema(), *charts.schemas(), ZODIAC_SCHEMA] + memory_tool_schemas()
 
@@ -134,7 +134,8 @@ class Session:
         self.first_day: date | None = None                     # the day 小瓜 was first opened (config)
         self.turn_tag: str | None = None  # id of the question being answered; its turn carries it
         self.greeting_kind = "morning"
-        self.last_qimen: tuple[str, str, dict] | None = None   # (chat id, date, chart): one matter, one 奇门 chart
+        self.last_moment: dict[str, tuple[str, str, dict]] = {}   # tool -> (chat id, date, chart): one matter, one 局 / 课
+        self.last_route = None            # (chat id, routing.Route): the last reading, for a follow-up
         now = now or _now()
         self.chats = ChatStore(folder / "chats" if folder else None)
         self.chat = self._resume_chat(now)
@@ -246,18 +247,28 @@ class Session:
     run_tool = run_daily_tool
 
     def _chart(self, name: str, arguments: dict, now: datetime) -> dict:
-        """紫微 or 奇门 (charts.py). A follow-up on the same matter, in this conversation and today, gets the
-        奇门 chart that matter was drawn on, not a new one for a later 时辰."""
+        """紫微, 奇门, 八字 or 小六壬 (charts.py). A follow-up on the same matter, in this conversation and today,
+        gets the 奇门 局 or 小六壬 课 that matter was drawn on, not a new one for a later 时辰."""
         question = str(arguments.get("question") or "").strip()
+        if name == "space_check":
+            return charts.space_check(question, str(arguments.get("space") or ""), str(arguments.get("facing") or ""),
+                                      arguments.get("problems") or [], str(arguments.get("limits") or ""))
+        if name == "qimen_pick":
+            return charts.qimen_pick(question, str(arguments.get("matter") or ""), arguments.get("start"),
+                                     arguments.get("end"), now=now)
         if name == "ziwei_chart":
             return charts.ziwei_chart(question, arguments.get("birth", ""), arguments.get("sex", ""),
                                       arguments.get("longitude"), now=now)
-        last = self.last_qimen
+        if name == "bazi_chart":
+            return charts.bazi_chart(question, arguments.get("birth", ""), arguments.get("sex", ""),
+                                     arguments.get("longitude"), now=now, pillars=arguments.get("pillars"))
+        last = self.last_moment.get(name)
         if arguments.get("follow_up") and last and last[:2] == (self.chat.id, now.date().isoformat()):
-            return {**last[2], "status": "REUSED", "note": f"追问同一件事：沿用 {last[2]['起局'][11:16]} 起的这一局"}
-        result = charts.qimen_chart(question, now=now)
+            drawn_at = last[2].get("起局") or last[2].get("起课")
+            return {**last[2], "status": "REUSED", "note": f"追问同一件事：沿用 {drawn_at[11:16]} 起的这一{'局' if name == 'qimen_chart' else '课'}"}
+        result = (charts.qimen_chart if name == "qimen_chart" else charts.xiaoliu_chart)(question, now=now)
         if result.get("status") == "OK":
-            self.last_qimen = (self.chat.id, now.date().isoformat(), result)
+            self.last_moment[name] = (self.chat.id, now.date().isoformat(), result)
         return result
 
     def _daily_reading(self, arguments: dict) -> dict:

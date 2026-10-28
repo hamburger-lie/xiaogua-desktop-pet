@@ -15,14 +15,17 @@ place every answer passes (agent.ask, after the evidence gate):
   casts    a hexagram named in the answer must be one that was cast: this turn's tools or the
            talk so far. One the model made up goes back once; still there, the
            sentences with it are taken out.
-  systems  小瓜 does 梅花 and the 黄历, and draws 紫微 and 奇门 when named (charts.py).
-           Asked for 六爻、风水排盘、八字 or 小六壬, the model is told so
-           with the question, and an answer that never says it cannot gets code's honest
-           line first. Chart words of a system no engine drew this turn (命宫、值符、世爻、
-           日主…) are made up; what an answer says of a drawn chart (命宫在巳、巨门坐命、值使
-           落震…) must be on it, and on every candidate chart unless both are said; GUARD-07
-           (紫微 on 寿命 or 婚姻成败, 奇门 on betting or 往东南走) is not crossed. Each is sent
-           back once, then taken out. The old 「小瓜不会紫微」 is sent back once too.
+  systems  小瓜 does 梅花 and the 黄历, and draws 紫微、奇门、八字 and 小六壬 when named (charts.py).
+           Asked for 六爻 or 风水排盘, the model is told so with the question, and an answer
+           that never says it cannot gets code's honest line first. Chart words of a system
+           no engine drew this turn (命宫、值符、世爻、日主…) are made up; what an answer says
+           of a drawn chart (命宫在巳、巨门坐命、值使落震、日主癸、落小吉…) must be on it, and on
+           every candidate chart unless both are said; the lines a system is not read for
+           (寿命、婚姻成败、用神旺衰、betting, 往东南走…) are not crossed. Each is sent back once,
+           then taken out. The old 「小瓜不会紫微」 is sent back once too. 风水 is space
+           observation (SPACE-01): the real room comes first (no practical line at all: code
+           puts the items in front), no 病灾, no dangerous renovation, no 化煞 trinkets;
+           飞星排盘 is still declined.
   shape    how an answer is built: a 能不能 question answered with the verdict first,
            and no answer far longer than asked for. Sent back once; if the second try
            still misses, it goes out as it is (code cannot rewrite the model's thought).
@@ -152,8 +155,15 @@ class Facts:
         if not isinstance(output, dict) or output.get("system") not in CHART_READERS \
                 or output.get("status") not in ("OK", "REUSED"):
             return
-        self.charts.setdefault(output["system"], []).append(chart_facts(output))
         self.gists.setdefault(output["system"], []).append(output.get("要点", ""))
+        if output.get("kind") == "挑时辰":
+            # Each 时辰 is a chart of its own; the best ones may be recommended as hours, like the 黄历's.
+            rows = output["时辰"]
+            self.charts.setdefault(output["system"], []).extend([_picked_facts(row)] for row in rows)
+            best =[row["时辰"][0] for row in rows if row["等级"] != "有门无奇"] or [row["时辰"][0] for row in rows]
+            self.days.append(DayHours("奇门挑出的时辰", best, best))
+            return
+        self.charts.setdefault(output["system"], []).append(chart_facts(output))
 
     def chart_listing(self) -> str:
         return "；".join(gist for gists in self.gists.values() for gist in gists if gist)
@@ -461,15 +471,16 @@ def wrong_occasions(text: str, facts: Facts) -> list[str]:
 
 
 # --- other systems --------------------------------------------------------------
-# 小瓜 does 梅花易数 and the 黄历. Since 2026-10-27 it also draws 紫微斗数 and 奇门遁甲 when the
-# user names one (charts.py; evidence/ziwei.md, evidence/qimen.md). Asked to work out 六爻、风水排盘、八字
-# or 小六壬, it says it cannot; the words of a chart no engine drew this turn can only be made up.
+# 小瓜 does 梅花易数 and the 黄历. It also draws 紫微斗数 and 奇门遁甲 (since 2026-10-27), 八字 and 小六壬
+# (10-28) when the user names one (charts.py; the evidence packs of each). Asked to work out 六爻 or
+# 风水排盘, it says it cannot; the words of a chart no engine drew this turn can only be made up.
 
 OTHER_SYSTEMS = {
     "紫微斗数": r"紫微(?:斗数)?",
     "奇门遁甲": r"奇门(?:遁甲)?",
     "六爻": r"六爻|纳甲",
-    "风水排盘": r"九宫飞星|玄空飞星|飞星|宅盘|风水(?!轮流转|宝地)",
+    "风水排盘": r"九宫飞星|玄空飞星|飞星|宅盘|玄空|风水盘",          # 飞星: not admitted
+    "风水": r"风水(?!轮流转|宝地|盘)",                                # space observation (SPACE-01)
     "八字": r"生辰八字|八字|四柱",
     "小六壬": r"[小大]?六壬",
 }
@@ -481,12 +492,13 @@ CHART_WORDS = {
     "六爻": r"世爻|应爻|纳甲|伏神|飞神|(?:官鬼|妻财|子孙|父母|兄弟)爻",
     "风水排盘": r"飞星盘|宅盘|替星|山星|向星|[一二三四五六七八九]运宅|玄空",
     "八字": r"日主|十神|喜用神|用神|忌神|伤官|七杀|劫财|偏印|命局|八字命盘|四柱命盘",
-    "小六壬": r"(?:大安|留连|速喜|赤口|小吉|空亡)宫|落(?:在)?(?:大安|留连|速喜|赤口|小吉|空亡)",
+    "小六壬": r"(?:大安|留连|速喜|赤口|小吉|空亡)落?宫|落(?:在)?(?:大安|留连|速喜|赤口|小吉|空亡)",
 }
-DRAWN_BY = {"紫微斗数": "ziwei_chart", "奇门遁甲": "qimen_chart"}     # drawn by charts.py
+DRAWN_BY = {"紫微斗数": "ziwei_chart", "奇门遁甲": "qimen_chart",      # drawn by charts.py
+            "八字": "bazi_chart", "小六壬": "xiaoliu_chart", "风水": "space_check"}
 _CURIOUS = re.compile(r"是什么|是啥|什么是|啥是|区别|不同|哪个准|准不准|准吗|靠谱|怎么来的|历史|原理|听说")
 _NOT_THIS = re.compile(r"(?:不要|不用|别|不想|不是)用?$")
-DECLINE = re.compile(r"不会|没学|不懂|做不了|排不了|算不了|看不了|不能[排算看]|只会")
+DECLINE = re.compile(r"不会|没学|不懂|做不了|排不了|算不了|看不了|不能[排算看]|只会|没排|不排")
 REFUSE = re.compile(r"不会|没学|不懂|只会梅花|只会黄历|只会看黄历")     # the old 「小瓜不会紫微」, untrue now
 
 
@@ -513,13 +525,16 @@ def _split(systems: list[str]) -> tuple[list[str], list[str]]:
 
 
 def decline_line(systems: list[str]) -> str:
-    return (f"{'、'.join(systems) or '别的术数'}小瓜不会，我只会梅花易数起卦和看黄历，点名的话也能排紫微斗数和奇门遁甲。"
+    return (f"{'、'.join(systems) or '别的术数'}小瓜不会，我只会梅花易数起卦和看黄历，点名的话也能排紫微、奇门、八字、小六壬，看房间风水。"
             "你想问的事，我可以起一卦或者翻翻黄历帮你看。")
 
 
 def draw_first_line(systems: list[str]) -> str:
     lines = {"紫微斗数": "紫微斗数得先排出盘才能说：告诉我公历出生日期、几点几分和性别。",
-             "奇门遁甲": "奇门遁甲得先起出局才能说，你再问我一次这件事。"}
+             "奇门遁甲": "奇门遁甲得先起出局才能说，你再问我一次这件事。",
+             "八字": "八字得先排出四柱才能说：告诉我公历出生日期和几点几分。",
+             "小六壬": "小六壬得先起出课才能说，你再问我一次这件事。",
+             "风水": "风水得先知道是哪个房间、窗朝哪、主要哪儿不舒服，跟我说说？"}
     return "".join(lines[s] for s in systems)
 
 
@@ -534,11 +549,12 @@ def ask_hint(systems: list[str]) -> str:
     here, never = _split(systems)
     parts = []
     if here:
-        tools = "、".join(f"{s}调 {DRAWN_BY[s]}" for s in here)
+        tools = "、".join(f"{s}调 {DRAWN_BY[s]}" + ("（问挑哪个时辰办事就调 qimen_pick）" if s == "奇门遁甲" else "")
+                         for s in here)
         parts.append(f"他要的是{'、'.join(here)}，这个能排：{tools}。缺出生信息就先问，不猜；只照工具给的「盘」和「象义」说，"
-                     "不凭记忆，工具没给的星曜、格局、流年不说。")
+                     "不凭记忆，工具没给的（星曜庙旺、格局吉凶、旺衰用神、流年流月）不说。")
     if never:
-        parts.append(f"他要的是{'、'.join(never)}。小瓜只会梅花易数、紫微斗数、奇门遁甲和黄历：先如实说不会，"
+        parts.append(f"他要的是{'、'.join(never)}。小瓜只会梅花易数、{'、'.join(DRAWN_BY)}和黄历：先如实说不会，"
                      "不编这些体系的盘面和术语；他想问的事，能用梅花起卦或翻黄历的就用它们答。")
     return "（系统）" + "".join(parts)
 
@@ -563,24 +579,33 @@ def say_cannot(text: str, systems: list[str]) -> tuple[str, list[str]]:
 
 
 def refused_to_draw(text: str, can: list[str], drawn) -> list[str]:
-    """Asked for 紫微 or 奇门, nothing drawn, and the answer says 小瓜 cannot (the old line)."""
+    """Asked for a system it draws, nothing drawn, and the answer says 小瓜 cannot (the old line)."""
     sentences = _SENTENCE.findall(text or "")
     return [s for s in can if s not in drawn
             and any(REFUSE.search(x) and re.search(OTHER_SYSTEMS[s], x) for x in sentences)]
 
 
-# GUARD-07: what a 紫微 chart is not read for, and what 奇门 is not drawn for.
+# What a chart is not read for (GUARD-07, references/bazi.md, XL-01), and what 奇门 is not drawn for.
+_LIFE_EVENTS = {"寿命": r"寿命|寿元|短命|长寿|夭折|活不过|活多久|活到\d+", "疾病": r"疾病|得病|生病|重病|癌",
+                "生育": r"不孕|生不出|生育|怀孕|生孩子|生男|生女", "子女好坏": r"子女.{0,3}(?:不孝|不好|没出息)",
+                "婚姻成败": r"离婚|二婚|克夫|克妻|婚姻.{0,3}(?:失败|不成|不顺|破裂)|会不会离"}
 OFF_LIMITS = {
-    "紫微斗数": {"寿命": r"寿命|寿元|短命|长寿|夭折|活不过|活多久|活到\d+", "疾病": r"疾病|得病|生病|重病|癌",
-                 "生育": r"不孕|生不出|生育|怀孕|生孩子|生男|生女", "子女好坏": r"子女.{0,3}(?:不孝|不好|没出息)",
-                 "婚姻成败": r"离婚|二婚|克夫|克妻|婚姻.{0,3}(?:失败|不成|不顺|破裂)|会不会离"},
+    "紫微斗数": _LIFE_EVENTS,
+    "八字": {**_LIFE_EVENTS, "伴侣忠诚": r"出轨|外遇|不忠|忠不忠", "投资收益": r"炒股|股票|基金|投资收益|稳赚|发大财",
+             "旺衰用神": r"喜用神|用神|忌神|身强|身弱|旺衰|日主(?:偏|太|很|比较)?(?:强|弱|旺|衰)",
+             "缺什么补什么": r"五行缺|缺[金木水火土]|补[金木水火土]"},
+    "小六壬": {"指认别人": r"偷|贼"},
+    "风水": {"病灾": r"生病|得病|招病|灾祸|血光|破财|招鬼|招阴|凶宅|犯煞|煞气|冲煞|不吉利",
+             "危险改造": r"承重墙|拆(?:掉)?墙|改燃气|动燃气|挪燃气|改电路|私拉电线|挡(?:住)?消防|堵(?:住)?(?:消防|安全出口)",
+             "推销摆件": r"开光|化煞|转运|貔貅|五帝钱|八卦镜|招财猫|风水摆件|风水球"},
     "奇门遁甲": {"赌博下注": r"赌博|赌钱|赌球|赌场|下注|押注|博彩|彩票|买球",
                  "伤人": r"报复|整人|害人|伤人|打人|弄死", "对抗执法": r"躲警察|抗法|袭警|对付警察|拒捕",
                  "逃避法律责任": r"逃避(?:法律|追查|抓捕|责任)|销毁证据"},
 }
 _COMPASS = re.compile(r"往[东南西北]|朝[东南西北]|向[东南西北](?:走|去|出发|坐|找)|坐[东南西北]|"
                       r"[东南西北]{1,2}(?:方|边|面|方向)(?:去|走|出发|坐|找|跑)")
-_HOLDS_BACK = re.compile(r"不看|不谈|不说|不碰|不管|不算|不能|不该|别拿|不拿|不用来|不排|不起局|看不了|算不了|"
+_HOLDS_BACK = re.compile(r"不看|不谈|不说|不碰|不管|不算|不能|不该|别拿|不拿|不用来|不排|不起局|看不了|算不了|不取|不判|不定|"
+                         r"别拆|别动|别改|别买|不要拆|不要动|不要改|不要买|千万别|不建议|不用买|不必买|不需要|"
                          r"不会[看算排]|小瓜不会|我不会|医生|医院|律师|专业的人")    # not DECLINE: 「寿命不会太长」
 
 
@@ -589,8 +614,9 @@ def off_limits(system: str, text: str) -> list[str]:
 
 
 def crossed_lines(text: str, drawn) -> list[str]:
-    """Sentences of a 紫微 or 奇门 answer that go where GUARD-07 says it may not: 寿命、疾病、生育、婚姻成败
-    from a 紫微 chart; betting, harm or the law, or a real-world direction (往东南走) from the 奇门 board."""
+    """Sentences of a drawn chart's answer that go where it may not: 寿命、疾病、生育、婚姻成败 from a 紫微 or
+    八字 chart, and 旺衰用神 or 缺什么补什么 from 八字; betting, harm or the law, or a real-world direction
+    (往东南走) from the 奇门 board; a thief named from a 小六壬 课."""
     found = []
     for sentence in _SENTENCE.findall(text or ""):
         body = sentence.strip()
@@ -626,7 +652,22 @@ _QM_FU_AT = re.compile(rf"值符星?(?:天[蓬任冲辅禽英芮柱心])?{_QM_TO
 _QM_SHI = re.compile(r"值使门?(?:是|为)?([休生伤杜景死惊开]门)")
 _QM_SHI_AT = re.compile(rf"值使(?:[休生伤杜景死惊开]门)?{_QM_TO}{_QM_PALACE}")
 _QM_AT = re.compile(rf"{_QM_THING}星?{_QM_TO}{_QM_PALACE}")
-OWN_WORDS = {"紫微斗数": _ZW_STAR + "|" + _ZW_PALACE, "奇门遁甲": _QM_THING}   # masked before other systems' words
+_STEM = "[甲乙丙丁戊己庚辛壬癸]"
+_BRANCH_CH = "[子丑寅卯辰巳午未申酉戌亥]"
+_GODS = "比肩|劫财|食神|伤官|正财|偏财|正官|七杀|偏官|正印|偏印|枭神"
+_GOD_ALIASES = {"偏官": "七杀", "枭神": "偏印"}
+_BZ_PILLAR = re.compile(rf"(年柱|月柱|日柱|时柱)(?:是|为|在)?({_STEM}{_BRANCH_CH})")
+_BZ_MASTER = re.compile(rf"(?:日主|日元)(?:是|为)?({_STEM})|({_STEM})[金木水火土]日主")
+_BZ_MONTH = re.compile(rf"月令(?:是|为|在)?({_BRANCH_CH})|生在({_BRANCH_CH})月")
+_BZ_GOD = re.compile(rf"(年干|月干|时干){_STEM}?(?:是|为|透出了|透出|透了|透)?({_GODS})")
+_BZ_LUCK = re.compile(rf"走(?:的是)?({_STEM}{_BRANCH_CH})大?运")
+_BZ_FLOW = re.compile(rf"(?:今年|流年)(?:是|为)?({_STEM}{_BRANCH_CH})")
+_BZ_LUCK_GOD = re.compile(rf"({_GODS})大运|走(?:的是)?(?:{_STEM}{_BRANCH_CH})?(?:这步|这个)?({_GODS})运")   # 「偏印大运」
+_BZ_FLOW_GOD = re.compile(rf"(?:今年|流年|\d{{4}}年?)(?:流年)?(?:是|为|走)?(?:{_STEM}{_BRANCH_CH})?(?:，|、)?({_GODS})年")
+_XL_PALACE = "大安|留连|速喜|赤口|小吉|空亡"
+_XL_SAID = re.compile(rf"落(?:在|到|了)?({_XL_PALACE})|({_XL_PALACE})落?宫|(?:这一课|这课|课宫|课)(?:是|为|落)?({_XL_PALACE})")
+OWN_WORDS = {"紫微斗数": _ZW_STAR + "|" + _ZW_PALACE, "奇门遁甲": _QM_THING,   # masked before other systems' words
+             "八字": _GODS + "|日主|日元|月令|十神|年柱|月柱|日柱|时柱", "小六壬": _XL_PALACE}
 
 
 def _palace(name: str) -> str:
@@ -685,16 +726,69 @@ def _qimen_facts(board: dict) -> dict:
     return facts
 
 
-CHART_READERS = {"紫微斗数": (_ziwei_said, _ziwei_facts), "奇门遁甲": (_qimen_said, _qimen_facts)}
+def _bazi_said(sentence: str) -> list[tuple]:
+    said: list[tuple] = list(_BZ_PILLAR.findall(sentence))
+    said += [("日主", a or b) for a, b in _BZ_MASTER.findall(sentence)]
+    said += [("月令", a or b) for a, b in _BZ_MONTH.findall(sentence)]
+    said += [(("十神", where), _GOD_ALIASES.get(god, god)) for where, god in _BZ_GOD.findall(sentence)]
+    said += [("大运", pillar) for pillar in _BZ_LUCK.findall(sentence)]
+    said += [("流年", pillar) for pillar in _BZ_FLOW.findall(sentence)]
+    said += [("大运十神", _GOD_ALIASES.get(a or b, a or b)) for a, b in _BZ_LUCK_GOD.findall(sentence)]
+    said += [("流年十神", _GOD_ALIASES.get(god, god)) for god in _BZ_FLOW_GOD.findall(sentence)]
+    return said
+
+
+def _bazi_facts(board: dict) -> dict:
+    facts: dict = {key: board[key] for key in ("年柱", "月柱", "日柱", "时柱", "大运", "流年", "大运十神", "流年十神")
+                   if board.get(key)}
+    facts.update({"日主": board["日主"][0], "月令": board["月令"][0]})
+    for where, god in board["天干十神"].items():                  # 「年干乙」: 「食神」
+        facts[("十神", where[:2])] = god
+    return facts
+
+
+def _xiaoliu_said(sentence: str) -> list[tuple]:
+    return [("课宫", a or b or c) for a, b, c in _XL_SAID.findall(sentence)]
+
+
+CHART_READERS = {"紫微斗数": (_ziwei_said, _ziwei_facts), "奇门遁甲": (_qimen_said, _qimen_facts),
+                 "八字": (_bazi_said, _bazi_facts), "小六壬": (_xiaoliu_said, lambda board: {"课宫": board["课宫"]}),
+                 "风水": (lambda sentence: [], lambda board: {})}      # no chart to read back: the shape is checked
+
+# 风水 (SPACE-01): the real room first, the traditional reading after it, on its own.
+_PRACTICAL = re.compile(r"采光|光线|亮|暗|通风|透气|闷|潮|霉|湿|除湿|噪|吵|隔音|动线|过道|挡路|磕碰|隐私|窗帘|收纳|"
+                        r"插座|插线板|电线|燃气|消防|安全|承重")
+_TRADITION = re.compile(r"[乾坤震巽坎离艮兑](?:卦|位|宫|为|[金木水火土])|五行|属[金木水火土乾坤震巽坎离艮兑]|老说法|"
+                        r"传统(?:上|说法)|风水上")
+
+
+def space_shape(text: str) -> str:
+    """「没说现实环境」 or 「传统说法在前」 for a 风水 answer that SPACE-01's two columns are not in; else 「」."""
+    sentences = [s for s in _SENTENCE.findall(text or "") if s.strip()]
+    practical = next((i for i, s in enumerate(sentences) if _PRACTICAL.search(s)), None)
+    tradition = next((i for i, s in enumerate(sentences) if _TRADITION.search(s)), None)
+    if practical is None:
+        return "没说现实环境"
+    return "传统说法在前" if tradition is not None and tradition < practical else ""
 _KEY_WORDS = {"命宫支": "命宫", "身宫支": "身宫", "身宫在": "身宫", "局": "局数", "命主": "命主", "身主": "身主",
+              "年柱": "年柱", "月柱": "月柱", "日柱": "日柱", "时柱": "时柱", "日主": "日主", "月令": "月令",
+              "大运": "现在的大运", "流年": "流年", "课宫": "课宫", "大运十神": "现在大运的十神", "流年十神": "流年的十神",
               "值符": "值符星", "值符宫": "值符落宫", "值使": "值使门", "值使宫": "值使落宫"}
 
 
 def _key_words(key) -> str:
     if isinstance(key, tuple):
         kind, name = key
-        return {"位": f"{name}所在的宫", "化": f"化{name}的星", "化宫": f"化{name}所在的宫"}[kind]
+        return {"位": f"{name}所在的宫", "化": f"化{name}的星", "化宫": f"化{name}所在的宫",
+                "十神": f"{name}的十神"}[kind]
     return _KEY_WORDS[key]
+
+
+def _picked_facts(row: dict) -> dict:
+    """One 时辰 of a 挑时辰 result (charts.qimen_pick): its 局, 值符, 值使 and where the doors that suit the matter are."""
+    facts: dict = {key: row[key] for key in ("局", "值符", "值符宫", "值使", "值使宫")}
+    facts.update({("位", door["门"]): door["宫"] for door in row["宜用的门"]})
+    return facts
 
 
 def chart_facts(output: dict) -> list[dict]:
@@ -774,11 +868,13 @@ class Review:
     chart_slips: list[tuple[str, str]] = field(default_factory=list)  # (sentence, why): a drawn chart said wrong
     crossed: list[str] = field(default_factory=list)  # GUARD-07: 紫微 on 寿命…, 奇门 on betting or 往东南走
     refused: list[str] = field(default_factory=list)  # 「小瓜不会紫微」, now that it is drawn
+    space_shape: str = ""                             # 风水: 「没说现实环境」 / 「传统说法在前」 (SPACE-01)
 
     @property
     def problems(self) -> bool:
         return bool(self.wrong_hours or self.too_long or self.late_verdict or self.invented
-                    or self.wrong_occasions or self.made_up or self.chart_slips or self.crossed or self.refused)
+                    or self.wrong_occasions or self.made_up or self.chart_slips or self.crossed or self.refused
+                    or self.space_shape)
 
     def sent_back(self) -> list[str]:
         """What a send-back was for, for Reply.checks and the log."""
@@ -795,6 +891,8 @@ class Review:
             out.append(f"退回:越界「{self.crossed[0][:30]}」")
         if self.refused:
             out.append("退回:说不会" + "、".join(self.refused))
+        if self.space_shape:
+            out.append(f"退回:{self.space_shape}")
         if self.wrong_hours:
             out.append("退回:时辰「" + "」「".join(self.wrong_hours) + "」")
         if self.late_verdict:
@@ -807,7 +905,8 @@ class Review:
     def let_through(self) -> list[str]:
         """Shape misses still there after the one send-back: the answer goes out anyway."""
         return ((["仍结论在后"] if self.late_verdict else []) + ([f"仍太长{self.too_long}字"] if self.too_long else [])
-                + (["仍说不会" + "、".join(self.refused)] if self.refused else []))
+                + (["仍说不会" + "、".join(self.refused)] if self.refused else [])
+                + (["仍传统说法在前"] if self.space_shape == "传统说法在前" else []))
 
 
 def review(text: str, facts: Facts | None = None) -> Review:
@@ -823,7 +922,8 @@ def review(text: str, facts: Facts | None = None) -> Review:
                   made_up_charts(repaired, facts.question, facts.drawn),
                   chart_slips(repaired, facts.charts),
                   crossed_lines(repaired, facts.drawn),
-                  refused_to_draw(repaired, facts.can_draw, facts.drawn))
+                  refused_to_draw(repaired, facts.can_draw, facts.drawn),
+                  space_shape(repaired) if "风水" in facts.drawn else "")
 
 
 def redo_message(result: Review, facts: Facts) -> str:
@@ -849,14 +949,18 @@ def redo_message(result: Review, facts: Facts) -> str:
         asks.append(f"回答里「{sentence[:40]}」跟排出来的盘对不上：{why}。盘上是：{facts.chart_listing()}。"
                     "照工具给的「盘」说；有候选盘时，两张不一样的地方要两说，或者干脆不说。")
     if result.crossed:
-        asks.append(f"「{result.crossed[0][:40]}」越界了：紫微不谈寿命、疾病、生育、婚姻成败；奇门的方位是盘上的，"
-                    "不说往哪个方向走；赌博、伤人、对抗执法的事都不看。这些如实说不看，别的照说。")
+        asks.append(f"「{result.crossed[0][:40]}」越界了：紫微、八字不谈寿命、疾病、生育、婚姻成败，八字也不定旺衰用神、"
+                    "不说缺什么补什么；奇门的方位是盘上的，不说往哪个方向走；赌博、伤人、对抗执法的事都不看；"
+                    "小六壬不凭课说谁偷了。这些如实说不看，别的照说。")
+    if result.space_shape:
+        asks.append(f"这条风水回答{result.space_shape}：先说现实环境（工具「现实环境」里的几项，先看什么、能做什么），"
+                    "传统说法放最后单列一句，只作参考。")
     if result.refused:
         asks.append(f"他要的{'、'.join(result.refused)}现在能排了，别说不会：调 "
                     f"{'、'.join(DRAWN_BY[n] for n in result.refused)}（缺出生信息就先问），照工具结果说。")
     if result.wrong_hours:
         said = "」「".join(result.wrong_hours)
-        asks.append(f"回答里的时辰跟程序算的黄历对不上：「{said}」。对他好的时辰只有这些：{facts.listing()}。"
+        asks.append(f"回答里的时辰跟程序算的（黄历或奇门挑时辰）对不上：「{said}」。对他好的时辰只有这些：{facts.listing()}。"
                     "说时辰只能照这里的整段说，不说「几点前 / 几点后」这种。")
     if result.late_verdict:
         asks.append("他问的是能不能、行不行，第一句先给结论（「能签」「先别去」「不太合适」），十来个字，再说为什么。")
@@ -876,6 +980,10 @@ def settle(result: Review, facts: Facts) -> Review:
             and s.strip() not in result.made_up and s.strip() not in slipped and s.strip() not in result.crossed]
     text = "".join(kept).strip()
     fixes = list(result.fixes)
+    if result.space_shape == "没说现实环境":
+        fixes.append("补:现实环境")
+        lead = "；".join(gist for gist in facts.gists.get("风水", []) if gist)
+        text = (f"{lead}。\n{text}" if text else f"{lead}。") if lead else text
     if result.chart_slips or result.crossed:
         fixes += (["删掉说错的盘面"] if result.chart_slips else []) + (["删掉越界的话"] if result.crossed else [])
         text = text or ("盘上是这样：" + facts.chart_listing() + "。" if facts.chart_listing() else "")
@@ -893,4 +1001,5 @@ def settle(result: Review, facts: Facts) -> Review:
     if result.invented:
         fixes.append("删掉编的卦")
         text = text or "这次还没起卦，小瓜不乱说卦。想看一件事，直接问我「能不能」就好。"
-    return Review(text, fixes, [], result.too_long, result.late_verdict, [], refused=result.refused)
+    return Review(text, fixes, [], result.too_long, result.late_verdict, [], refused=result.refused,
+                  space_shape="传统说法在前" if result.space_shape == "传统说法在前" else "")

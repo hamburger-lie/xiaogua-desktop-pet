@@ -104,7 +104,7 @@ def test_responses_translate_back_including_broken_tool_arguments():
 # ------------------------------------------------------------ the agent loop through the adapter
 
 def test_the_evidence_gate_holds_on_an_openai_compatible_vendor():
-    turns = [chat(tool_calls=[call("cast_now", {"question": "说说明天的面试"}, "c1")]),
+    turns = [chat(tool_calls=[call("cast_now", {"question": "明天面试的结果怎么样"}, "c1")]),
              chat("顺着来。"),                                                # tries to skip the gate
              chat(tool_calls=[call("validate_reading", {"reading_record": PASSING_RECORD}, "c2")]),
              chat("小瓜看过了：顺着来。")]
@@ -116,7 +116,7 @@ def test_the_evidence_gate_holds_on_an_openai_compatible_vendor():
 
     client = OpenAICompatClient("https://api.deepseek.com/v1/", "sk-test", vision=False, post=post)
     agent = XiaoguaAgent(client=client, model="deepseek-chat", thinking=False, effort=None)
-    reply = agent.ask("说说明天的面试")
+    reply = agent.ask("明天面试的结果怎么样")
     assert reply.validated is True and reply.text == "小瓜看过了：顺着来。"
     url, headers, first = sent[0]
     assert url == "https://api.deepseek.com/v1/chat/completions"

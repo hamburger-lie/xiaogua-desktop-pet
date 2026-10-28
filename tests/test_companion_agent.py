@@ -81,14 +81,14 @@ def test_answer_after_cast_is_blocked_until_the_gate_passes():
 
 
 def test_persistent_gate_skipping_is_reported_not_hidden():
-    client = ScriptedClient([[tool("cast_now", question="说说明天的面试")]] + [[text("随便说说")]] * 3)
-    reply = XiaoguaAgent(client=client).ask("说说明天的面试")
+    client = ScriptedClient([[tool("cast_now", question="明天面试的结果怎么样")]] + [[text("随便说说")]] * 3)
+    reply = XiaoguaAgent(client=client).ask("明天面试的结果怎么样")
     assert reply.validated is False and reply.error
 
 
 def test_system_prompt_is_cached_and_tools_are_declared():
     client = ScriptedClient([[text("在的")]])
-    XiaoguaAgent(client=client).ask("你好")
+    XiaoguaAgent(client=client).ask("明天面试的结果怎么样")              # routed to 梅花: its tools are offered
     request = client.requests[0]
     assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert {t["name"] for t in request["tools"]} >= {"cast_now", "validate_reading", "almanac_day", "daily_reading"}

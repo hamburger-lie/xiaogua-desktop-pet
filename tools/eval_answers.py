@@ -37,6 +37,14 @@ QUESTIONS = [
     "十分钟后提醒我喝水",
     "用紫微斗数看看我的性格，我1995年5月12日上午10点半出生，女",
     "用奇门遁甲看看我下午去见客户怎么样",
+    "用奇门帮我挑个时辰，明天几点去见客户好",
+    "帮我排个八字看看适合做什么工作，1995年5月12日上午10点半出生，男",
+    "用小六壬看看我下午面试顺不顺",
+    # routed by code, no method named (companion/routing.py)
+    "我1995年5月12日上午10点半出生，男，适合做什么工作",
+    "快速看看我今天适不适合联系客户",
+    "今天适合搬家吗",
+    "我卧室朝北，特别潮，墙角发霉，怎么办",
 ]
 TIME_WORDS = ("点", "时辰", "子时", "丑时", "寅时", "卯时", "辰时", "巳时", "午时", "未时", "申时", "酉时", "戌时", "亥时")
 
@@ -95,7 +103,8 @@ def main() -> int:
                 left["盘面"] += 1
             rows.append({"question": question, "seconds": seconds, "checks": reply.checks,
                          "left": after.fixes + after.wrong_hours, "mood": reply.mood, "answer": reply.text})
-            print(f"{question}  {seconds}s  {'；'.join(reply.checks) or '干净'}")
+            print(f"{question}  {seconds}s  {'；'.join(reply.checks) or '干净'}"
+                  + (f"  路由:{reply.route}" if reply.route else ""))
             for fact in agent.session.memory.facts:           # a reminder: was the minute worked out right?
                 if fact.time:
                     asked = datetime.fromtimestamp(start)

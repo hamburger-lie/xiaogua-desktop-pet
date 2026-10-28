@@ -115,7 +115,7 @@ def load_registry() -> dict[str, set[str]]:
         "XL": {"XL-01", "XL-02", "XL-03"},
         "BZ": {"BZ-01", "BZ-02", "BZ-03", "BZ-04", "BZ-05"},
         "ZW": {f"ZW-0{i}" for i in range(1, 8)},
-        "QM": {f"QM-0{i}" for i in range(1, 8)},
+        "QM": {f"QM-0{i}" for i in range(1, 9)},
         "REL": {"REL-01", "REL-02", "REL-03", "REL-04", "REL-05"},
         "WORK": {"WORK-01"},
         "COOP": {"COOP-01"},

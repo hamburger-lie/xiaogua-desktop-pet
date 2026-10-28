@@ -152,8 +152,9 @@ def test_daily_question_gets_the_daily_prompt_tools_and_context(tmp_path):
     system = client.requests[0]["system"]
     assert system[0]["text"] == SYSTEM_PROMPT and "【今天】" in system[1]["text"] and "属猴" in system[1]["text"]
     names = {t["name"] for t in client.requests[0]["tools"]}
-    assert {"almanac_day", "almanac_pick_days", "remember_zodiac", "daily_reading", "validate_reading"} <= names
-    assert not names & {"cast_now", "lookup_hexagrams"}
+    assert {"almanac_day", "almanac_pick_days", "remember_zodiac", "remember_fact"} <= names    # a 黄历 question
+    assert not names & {"cast_now", "lookup_hexagrams", "daily_reading"}
+    assert reply.route == "黄历·XG-ALMANAC"
     assert session.chat.daily[-1]["q"] == "我今天适合干嘛"
 
 

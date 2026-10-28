@@ -42,6 +42,7 @@ STEP_LABELS = {
     "almanac_day": "正在翻黄历", "almanac_pick_days": "正在挑日子", "remember_zodiac": "记下你的属相",
     "remember_fact": "记下来", "forget_fact": "划掉一条", "close_fact": "记下结果",
     "daily_reading": "正在起卦", "ziwei_chart": "正在排紫微命盘", "qimen_chart": "正在起奇门局",
+    "qimen_pick": "正在一个个时辰起局", "bazi_chart": "正在排八字", "xiaoliu_chart": "正在起小六壬", "space_check": "正在看房间",
 }
 
 STYLE = f"""
